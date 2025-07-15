@@ -6,7 +6,7 @@ import { Textarea } from '@/components/ui/textarea';
 import { Label } from '@/components/ui/label';
 import { Badge } from '@/components/ui/badge';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
-import { Send, Eye, Mail, Clock, MessageSquare, Users } from 'lucide-react';
+import { Send, Eye, Mail, Clock, MessageSquare, Users, Pause, Play, Square } from 'lucide-react';
 
 interface TicketFormData {
   emails: string;
@@ -18,15 +18,27 @@ interface TicketFormData {
 interface TicketFormProps {
   onSubmit: (data: TicketFormData) => void;
   isProcessing: boolean;
+  isPaused: boolean;
+  onPauseResume: () => void;
+  onEndJob: () => void;
+  onSendTest: (data: { email: string, subject: string, description: string }) => void;
 }
 
-export const TicketForm: React.FC<TicketFormProps> = ({ onSubmit, isProcessing }) => {
+export const TicketForm: React.FC<TicketFormProps> = ({ 
+  onSubmit, 
+  isProcessing,
+  isPaused,
+  onPauseResume,
+  onEndJob,
+  onSendTest,
+}) => {
   const [formData, setFormData] = useState<TicketFormData>({
     emails: '',
     subject: '',
     description: '',
     delay: 1,
   });
+  const [testEmail, setTestEmail] = useState('');
 
   const emailCount = formData.emails
     .split('\n')
@@ -39,6 +51,14 @@ export const TicketForm: React.FC<TicketFormProps> = ({ onSubmit, isProcessing }
 
   const handleInputChange = (field: keyof TicketFormData, value: string | number) => {
     setFormData(prev => ({ ...prev, [field]: value }));
+  };
+
+  const handleTestClick = () => {
+    onSendTest({
+        email: testEmail,
+        subject: formData.subject,
+        description: formData.description,
+    });
   };
 
   return (
@@ -56,7 +76,6 @@ export const TicketForm: React.FC<TicketFormProps> = ({ onSubmit, isProcessing }
       <CardContent>
         <form onSubmit={handleSubmit} className="space-y-6">
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-            {/* Left Column - Emails */}
             <div className="space-y-4">
               <div className="space-y-2">
                 <div className="flex items-center justify-between">
@@ -76,14 +95,35 @@ export const TicketForm: React.FC<TicketFormProps> = ({ onSubmit, isProcessing }
                   onChange={(e) => handleInputChange('emails', e.target.value)}
                   className="min-h-[200px] font-mono text-sm bg-muted/30 border-border focus:bg-card transition-colors"
                   required
+                  disabled={isProcessing}
                 />
                 <p className="text-xs text-muted-foreground">
                   Enter one email address per line
                 </p>
+                <div className="pt-4 border-t border-dashed">
+                    <Label htmlFor="test-email" className="text-xs text-muted-foreground">Send a single test ticket</Label>
+                    <div className="flex items-center space-x-2 mt-2">
+                        <Input
+                            id="test-email"
+                            type="email"
+                            placeholder="Enter test email..."
+                            value={testEmail}
+                            onChange={(e) => setTestEmail(e.target.value)}
+                            className="h-10 bg-muted/30 border-border focus:bg-card"
+                            disabled={isProcessing}
+                        />
+                        <Button 
+                            type="button" 
+                            variant="outline" 
+                            onClick={handleTestClick}
+                            disabled={isProcessing || !testEmail || !formData.subject || !formData.description}
+                        >
+                            Test
+                        </Button>
+                    </div>
+                </div>
               </div>
             </div>
-
-            {/* Right Column - Ticket Details */}
             <div className="space-y-4">
               <div className="space-y-2">
                 <Label htmlFor="subject" className="flex items-center space-x-2">
@@ -97,6 +137,7 @@ export const TicketForm: React.FC<TicketFormProps> = ({ onSubmit, isProcessing }
                   onChange={(e) => handleInputChange('subject', e.target.value)}
                   className="h-12 bg-muted/30 border-border focus:bg-card transition-colors"
                   required
+                  disabled={isProcessing}
                 />
               </div>
 
@@ -115,6 +156,7 @@ export const TicketForm: React.FC<TicketFormProps> = ({ onSubmit, isProcessing }
                     onChange={(e) => handleInputChange('delay', parseInt(e.target.value) || 0)}
                     className="w-24 h-12 bg-muted/30 border-border focus:bg-card transition-colors"
                     required
+                    disabled={isProcessing}
                   />
                   <span className="text-sm text-muted-foreground">seconds</span>
                 </div>
@@ -151,6 +193,7 @@ export const TicketForm: React.FC<TicketFormProps> = ({ onSubmit, isProcessing }
                   onChange={(e) => handleInputChange('description', e.target.value)}
                   className="min-h-[120px] bg-muted/30 border-border focus:bg-card transition-colors"
                   required
+                  disabled={isProcessing}
                 />
                 <p className="text-xs text-muted-foreground">
                   HTML formatting is supported
@@ -159,27 +202,51 @@ export const TicketForm: React.FC<TicketFormProps> = ({ onSubmit, isProcessing }
             </div>
           </div>
 
-          {/* Submit Button */}
           <div className="pt-4 border-t border-border">
-            <Button
-              type="submit"
-              variant="premium"
-              size="lg"
-              disabled={isProcessing || !formData.emails.trim() || !formData.subject.trim() || !formData.description.trim()}
-              className="w-full"
-            >
-              {isProcessing ? (
-                <>
-                  <Clock className="h-4 w-4 mr-2 animate-spin" />
-                  Processing {emailCount} Tickets...
-                </>
-              ) : (
-                <>
-                  <Send className="h-4 w-4 mr-2" />
-                  Create {emailCount} Tickets
-                </>
-              )}
-            </Button>
+            {!isProcessing ? (
+              <Button
+                type="submit"
+                variant="premium"
+                size="lg"
+                disabled={!formData.emails.trim() || !formData.subject.trim() || !formData.description.trim()}
+                className="w-full"
+              >
+                <Send className="h-4 w-4 mr-2" />
+                Create {emailCount} Tickets
+              </Button>
+            ) : (
+              <div className="flex items-center justify-center space-x-4">
+                <Button
+                  type="button"
+                  variant="secondary"
+                  size="lg"
+                  onClick={onPauseResume}
+                  className="flex-1"
+                >
+                  {isPaused ? (
+                    <>
+                      <Play className="h-4 w-4 mr-2" />
+                      Resume Job
+                    </>
+                  ) : (
+                    <>
+                      <Pause className="h-4 w-4 mr-2" />
+                      Pause Job
+                    </>
+                  )}
+                </Button>
+                <Button
+                  type="button"
+                  variant="destructive"
+                  size="lg"
+                  onClick={onEndJob}
+                  className="flex-1"
+                >
+                  <Square className="h-4 w-4 mr-2" />
+                  End Job
+                </Button>
+              </div>
+            )}
           </div>
         </form>
       </CardContent>

@@ -1,27 +1,48 @@
 import React from 'react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { Badge } from '@/components/ui/badge';
-import { User, Building } from 'lucide-react';
+import { Button } from '@/components/ui/button';
+import { User, Building, AlertCircle, CheckCircle, Loader } from 'lucide-react';
 
 interface Profile {
   profileName: string;
   orgId: string;
-  refreshToken: string;
   defaultDepartmentId: string;
 }
+
+type ApiStatus = {
+    status: 'loading' | 'success' | 'error';
+    message: string;
+};
 
 interface ProfileSelectorProps {
   profiles: Profile[];
   selectedProfile: Profile | null;
   onProfileChange: (profileName: string) => void;
+  apiStatus: ApiStatus;
+  onShowStatus: () => void;
 }
 
 export const ProfileSelector: React.FC<ProfileSelectorProps> = ({
   profiles,
   selectedProfile,
   onProfileChange,
+  apiStatus,
+  onShowStatus,
 }) => {
+  const getBadgeProps = () => {
+    switch (apiStatus.status) {
+      case 'success':
+        return { text: 'Connected', variant: 'success' as const, icon: <CheckCircle className="h-4 w-4 mr-2" /> };
+      case 'error':
+        return { text: 'Connection Failed', variant: 'destructive' as const, icon: <AlertCircle className="h-4 w-4 mr-2" /> };
+      default:
+        return { text: 'Checking...', variant: 'secondary' as const, icon: <Loader className="h-4 w-4 mr-2 animate-spin" /> };
+    }
+  };
+  
+  const badgeProps = getBadgeProps();
+
   return (
     <Card className="shadow-medium hover:shadow-large transition-all duration-300">
       <CardHeader className="pb-3">
@@ -38,6 +59,7 @@ export const ProfileSelector: React.FC<ProfileSelectorProps> = ({
           <Select 
             value={selectedProfile?.profileName || ''} 
             onValueChange={onProfileChange}
+            disabled={profiles.length === 0}
           >
             <SelectTrigger className="h-12 bg-muted/50 border-border hover:bg-muted transition-colors">
               <SelectValue placeholder="Select a profile..." />
@@ -62,9 +84,12 @@ export const ProfileSelector: React.FC<ProfileSelectorProps> = ({
             <div className="p-4 bg-gradient-muted rounded-lg border border-border">
               <div className="flex items-center justify-between mb-2">
                 <span className="text-sm font-medium text-foreground">Active Profile</span>
-                <Badge variant="secondary" className="bg-primary/10 text-primary">
-                  Connected
-                </Badge>
+                
+                <Button variant={badgeProps.variant} size="sm" onClick={onShowStatus}>
+                    {badgeProps.icon}
+                    {badgeProps.text}
+                </Button>
+
               </div>
               <div className="space-y-1 text-sm">
                 <div className="flex justify-between">

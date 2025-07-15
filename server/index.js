@@ -12,8 +12,6 @@ const server = http.createServer(app);
 const io = new Server(server, { cors: { origin: "http://localhost:8080" } });
 
 const port = process.env.PORT || 3000;
-const CLIENT_ID = process.env.ZOHO_CLIENT_ID;
-const CLIENT_SECRET = process.env.ZOHO_CLIENT_SECRET;
 
 const tokenCache = {};
 const activeJobs = {}; 
@@ -21,30 +19,49 @@ const activeJobs = {};
 app.use(cors());
 app.use(express.json());
 
+// --- MODIFIED: This function now returns the full data object on success ---
 const getValidAccessToken = async (profile) => {
     const now = Date.now();
-    if (tokenCache[profile.profileName] && tokenCache[profile.profileName].expiresAt > now) {
-        return tokenCache[profile.profileName].accessToken;
+    
+    // The cache stores the full data object, so we check for its access_token
+    if (tokenCache[profile.profileName] && tokenCache[profile.profileName].data.access_token && tokenCache[profile.profileName].expiresAt > now) {
+        return tokenCache[profile.profileName].data;
     }
+
     try {
         const params = new URLSearchParams({
             refresh_token: profile.refreshToken,
-            client_id: CLIENT_ID,
-            client_secret: CLIENT_SECRET,
+            client_id: profile.clientId,
+            client_secret: profile.clientSecret,
             grant_type: 'refresh_token'
         });
+
         const response = await axios.post('https://accounts.zoho.com/oauth/v2/token', params);
-        const { access_token, expires_in } = response.data;
-        tokenCache[profile.profileName] = { accessToken: access_token, expiresAt: now + ((expires_in - 60) * 1000) };
-        return access_token;
+        
+        if (response.data.error) {
+            throw new Error(response.data.error);
+        }
+        
+        const { expires_in } = response.data;
+        // Cache the entire response data
+        tokenCache[profile.profileName] = { data: response.data, expiresAt: now + ((expires_in - 60) * 1000) };
+        // Return the entire response data
+        return response.data;
+
     } catch (error) {
-        console.error(`FATAL: Could not refresh token for ${profile.profileName}.`);
-        throw new Error('Failed to refresh token.');
+        const errorMessage = error.response?.data?.error || error.message || 'Failed to refresh token.';
+        console.error(`TOKEN_REFRESH_FAILED for ${profile.profileName}:`, errorMessage);
+        throw error;
     }
 };
 
+// --- MODIFIED: This function now expects an object from getValidAccessToken ---
 const makeApiCall = async (method, url, data, profile) => {
-    const accessToken = await getValidAccessToken(profile);
+    const tokenResponse = await getValidAccessToken(profile);
+    const accessToken = tokenResponse.access_token; // Extract the token from the object
+    if (!accessToken) {
+        throw new Error('Failed to retrieve a valid access token.');
+    }
     const headers = { 'Authorization': `Zoho-oauthtoken ${accessToken}` };
     return axios({ method, url, data, headers });
 };
@@ -53,20 +70,87 @@ app.get('/api/profiles', (req, res) => {
     try {
         const profilesData = fs.readFileSync(path.join(__dirname, 'profiles.json'));
         const allProfiles = JSON.parse(profilesData);
-        res.json(allProfiles.map(({ refreshToken, ...rest }) => rest));
+        const safeProfiles = allProfiles.map(({ refreshToken, clientId, clientSecret, ...rest }) => rest);
+        res.json(safeProfiles);
     } catch (error) {
         res.status(500).json({ message: "Could not load profiles." });
     }
 });
 
 io.on('connection', (socket) => {
-    console.log(`[DEBUG] New connection. Socket ID: ${socket.id}`);
-    const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+    console.log(`[INFO] New connection. Socket ID: ${socket.id}`);
+
+    // --- MODIFIED: checkApiStatus now sends the full response on success ---
+    socket.on('checkApiStatus', async (data) => {
+        const { selectedProfileName } = data;
+        try {
+            const profiles = JSON.parse(fs.readFileSync(path.join(__dirname, 'profiles.json')));
+            const activeProfile = profiles.find(p => p.profileName === selectedProfileName);
+            if (!activeProfile) {
+                throw new Error('Profile not found in profiles.json.');
+            }
+            
+            // Capture the full response object
+            const tokenResponse = await getValidAccessToken(activeProfile);
+            
+            socket.emit('apiStatusResult', { 
+                success: true, 
+                message: 'Token is valid. Connection to Zoho API is successful.',
+                fullResponse: tokenResponse // Send the full response
+            });
+        } catch (error) {
+            const errorMessage = error.response?.data?.error || error.message;
+            socket.emit('apiStatusResult', { 
+                success: false, 
+                message: `Connection failed: ${errorMessage}`,
+                fullResponse: error.response?.data || { error: errorMessage }
+            });
+        }
+    });
+    
+    // ... other socket listeners like startBulkCreate remain the same ...
+    const interruptibleSleep = (ms, socketId) => {
+        return new Promise(resolve => {
+            if (ms <= 0) return resolve();
+            const interval = 100;
+            let elapsed = 0;
+            const timerId = setInterval(() => {
+                if (!activeJobs[socketId] || activeJobs[socketId].status === 'ended') {
+                    clearInterval(timerId);
+                    return resolve();
+                }
+                elapsed += interval;
+                if (elapsed >= ms) {
+                    clearInterval(timerId);
+                    resolve();
+                }
+            }, interval);
+        });
+    };
+
+    socket.on('sendTestTicket', async (data) => {
+        const { email, subject, description, selectedProfileName } = data;
+        if (!email || !selectedProfileName) {
+            return socket.emit('testTicketResult', { success: false, error: 'Missing email or profile.' });
+        }
+        try {
+            const profiles = JSON.parse(fs.readFileSync(path.join(__dirname, 'profiles.json')));
+            const activeProfile = profiles.find(p => p.profileName === selectedProfileName);
+            if (!activeProfile) {
+                return socket.emit('testTicketResult', { success: false, error: 'Profile not found.' });
+            }
+            const ticketData = { subject, description, departmentId: activeProfile.defaultDepartmentId, contact: { email } };
+            const response = await makeApiCall('post', 'https://desk.zoho.com/api/v1/tickets', ticketData, activeProfile);
+            socket.emit('testTicketResult', { success: true, fullResponse: response.data });
+        } catch (error) {
+            const errorMessage = error.response?.data?.message || error.message;
+            socket.emit('testTicketResult', { success: false, error: errorMessage, fullResponse: error.response?.data });
+        }
+    });
 
     socket.on('startBulkCreate', async (data) => {
         const { emails, subject, description, delay, selectedProfileName } = data;
         
-        console.log(`[DEBUG] 'startBulkCreate' event received from ${socket.id}`);
         activeJobs[socket.id] = { status: 'running' };
 
         try {
@@ -78,36 +162,27 @@ io.on('connection', (socket) => {
                 return;
             }
 
-            // Set the full job details
             activeJobs[socket.id].details = { emails, subject, description, delay, activeProfile };
             activeJobs[socket.id].currentIndex = 0;
-            console.log(`[DEBUG] Job initialized:`, JSON.stringify(activeJobs[socket.id]));
-
 
             for (let i = 0; i < emails.length; i++) {
-                console.log(`[DEBUG] Loop top. Iteration: ${i}. Job state:`, JSON.stringify(activeJobs[socket.id]));
-
-                if (!activeJobs[socket.id] || activeJobs[socket.id].status === 'ended') {
-                    console.log(`[DEBUG] Job ended, breaking loop.`);
-                    break;
-                }
+                if (!activeJobs[socket.id] || activeJobs[socket.id].status === 'ended') break;
                 
                 while (activeJobs[socket.id]?.status === 'paused') {
-                    console.log(`[DEBUG] Paused... waiting.`);
-                    await sleep(500);
+                    await new Promise(resolve => setTimeout(resolve, 500));
                 }
 
-                if (!activeJobs[socket.id] || activeJobs[socket.id].status === 'ended') {
-                    console.log(`[DEBUG] Job ended during pause, breaking loop.`);
-                    break;
+                if (!activeJobs[socket.id] || activeJobs[socket.id].status === 'ended') break;
+                
+                if (i > 0 && delay > 0) {
+                    await interruptibleSleep(delay * 1000, socket.id);
                 }
                 
-                if (i > 0 && delay > 0) await sleep(delay * 1000);
-                
+                if (!activeJobs[socket.id] || activeJobs[socket.id].status === 'ended') break;
+
                 const email = emails[i];
                 if (!email.trim()) continue;
 
-                console.log(`Processing ticket ${i + 1}/${emails.length} for ${email}`);
                 const ticketData = { subject, description, departmentId: activeProfile.defaultDepartmentId, contact: { email } };
                 
                 try {
@@ -118,12 +193,10 @@ io.on('connection', (socket) => {
                     socket.emit('ticketResult', { email, success: false, error: errorMessage, fullResponse: error.response?.data });
                 }
 
-                // Update currentIndex in the job object
                 if(activeJobs[socket.id]) {
                     activeJobs[socket.id].currentIndex = i + 1;
                 }
             }
-
         } catch (error) {
             socket.emit('bulkError', { message: 'A critical server error occurred.' });
         } finally {
@@ -134,7 +207,6 @@ io.on('connection', (socket) => {
                 } else {
                     socket.emit('bulkComplete');
                 }
-                console.log(`[DEBUG] Job finished with status: ${finalStatus}. Cleaning up.`);
                 delete activeJobs[socket.id];
             }
         }
@@ -143,26 +215,22 @@ io.on('connection', (socket) => {
     socket.on('pauseJob', () => {
         if (activeJobs[socket.id]) {
             activeJobs[socket.id].status = 'paused';
-            console.log(`[DEBUG] 'pauseJob' event. New state:`, JSON.stringify(activeJobs[socket.id]));
         }
     });
 
     socket.on('resumeJob', () => {
         if (activeJobs[socket.id]) {
             activeJobs[socket.id].status = 'running';
-            console.log(`[DEBUG] 'resumeJob' event. New state:`, JSON.stringify(activeJobs[socket.id]));
         }
     });
 
     socket.on('endJob', () => {
         if (activeJobs[socket.id]) {
             activeJobs[socket.id].status = 'ended';
-            console.log(`[DEBUG] 'endJob' event. New state:`, JSON.stringify(activeJobs[socket.id]));
         }
     });
 
     socket.on('disconnect', () => {
-        console.log(`[DEBUG] User disconnected: ${socket.id}. Deleting job.`);
         delete activeJobs[socket.id];
     });
 });
