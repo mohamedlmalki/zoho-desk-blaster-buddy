@@ -1,0 +1,32 @@
+[
+  {
+    "profileName": "My Main Account",
+    "orgId": "893141744",
+    "refreshToken": "1000.a24c4df3b4357d70143f8e9ae83e7b5f.073e8305b93c6c1f1ab29babc8e60b9e",
+	"defaultDepartmentId": "1155803000000006907"
+  },
+  {
+    "profileName": "kHAWI",
+    "orgId": "kHAWI",
+    "refreshToken": "kHAWI",
+	"defaultDepartmentId": "kHAWI"
+  },
+  {
+    "profileName": "kHAWI",
+    "orgId": "kHAWI",
+    "refreshToken": "kHAWI",
+	"defaultDepartmentId": "kHAWI"
+  },
+  {
+    "profileName": "kHAWI",
+    "orgId": "kHAWI",
+    "refreshToken": "kHAWI",
+	"defaultDepartmentId": "kHAWI"
+  },
+  {
+    "profileName": "kHAWI",
+    "orgId": "kHAWI",
+    "refreshToken": "kHAWI",
+	"defaultDepartmentId": "kHAWI"
+  }  
+]

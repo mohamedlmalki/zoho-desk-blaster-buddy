@@ -1,0 +1,202 @@
+import React from 'react';
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { Button } from '@/components/ui/button';
+import { Badge } from '@/components/ui/badge';
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
+import { CheckCircle2, XCircle, Eye, Hash, Mail, Clock, BarChart3 } from 'lucide-react';
+
+// Make sure this interface is exported
+export interface TicketResult {
+  email: string;
+  success: boolean;
+  ticketNumber?: string;
+  error?: string;
+  fullResponse?: any;
+}
+
+interface ResultsDisplayProps {
+  results: TicketResult[];
+  isProcessing: boolean;
+  isComplete: boolean;
+  totalTickets: number;
+  countdown: number;
+}
+
+// Make sure the component itself is exported
+export const ResultsDisplay: React.FC<ResultsDisplayProps> = ({ 
+  results, 
+  isProcessing, 
+  isComplete,
+  totalTickets,
+  countdown
+}) => {
+  const successCount = results.filter(r => r.success).length;
+  const errorCount = results.filter(r => !r.success).length;
+  const progressPercent = totalTickets > 0 ? (results.length / totalTickets) * 100 : 0;
+
+  if (results.length === 0 && !isProcessing) {
+    return null;
+  }
+
+  return (
+    <Card className="shadow-medium hover:shadow-large transition-all duration-300">
+      <CardHeader className="pb-4">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center space-x-2">
+            <BarChart3 className="h-5 w-5 text-primary" />
+            <CardTitle className="text-lg">Processing Results</CardTitle>
+          </div>
+          <div className="flex items-center space-x-3">
+            <Badge variant="success" className="bg-success/10 text-success">
+              <CheckCircle2 className="h-3 w-3 mr-1" />
+              {successCount} Success
+            </Badge>
+            {errorCount > 0 && (
+              <Badge variant="destructive" className="bg-destructive/10">
+                <XCircle className="h-3 w-3 mr-1" />
+                {errorCount} Errors
+              </Badge>
+            )}
+          </div>
+        </div>
+        <CardDescription>
+          {isProcessing ? 'Creating tickets in real-time...' : 
+           isComplete ? `All ${totalTickets} tickets have been processed.` : 
+           'View results below.'}
+        </CardDescription>
+      </CardHeader>
+
+      <CardContent>
+        {(isProcessing || (isComplete && results.length > 0)) && (
+          <div className="mb-6">
+            <div className="flex items-center justify-between mb-2">
+              <span className="text-sm font-medium text-foreground">Progress</span>
+              <div className="flex items-center space-x-2">
+                {isProcessing && countdown > 0 && (
+                  <Badge variant="outline" className="font-mono">
+                    <Clock className="h-3 w-3 mr-1" />
+                    Next ticket in {countdown}s
+                  </Badge>
+                )}
+                <span className="text-sm text-muted-foreground">{results.length} / {totalTickets} processed</span>
+              </div>
+            </div>
+            <div className="w-full bg-muted rounded-full h-2">
+              <div 
+                className="bg-gradient-primary h-2 rounded-full transition-all duration-300"
+                style={{ width: `${progressPercent}%` }}
+              />
+            </div>
+          </div>
+        )}
+
+        {results.length > 0 && (
+          <div className="overflow-hidden rounded-lg border border-border">
+            <div className="overflow-x-auto">
+              <table className="w-full">
+                <thead className="bg-muted/50 border-b border-border">
+                  <tr>
+                    <th className="px-4 py-3 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider w-12">
+                      <Hash className="h-4 w-4" />
+                    </th>
+                    <th className="px-4 py-3 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider">
+                      <div className="flex items-center space-x-1">
+                        <Mail className="h-4 w-4" />
+                        <span>Email</span>
+                      </div>
+                    </th>
+                    <th className="px-4 py-3 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider w-24">
+                      Status
+                    </th>
+                    <th className="px-4 py-3 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider">
+                      Details
+                    </th>
+                    <th className="px-4 py-3 text-center text-xs font-medium text-muted-foreground uppercase tracking-wider w-20">
+                      Action
+                    </th>
+                  </tr>
+                </thead>
+                <tbody className="bg-card divide-y divide-border">
+                  {results.map((result, index) => (
+                    <tr 
+                      key={index}
+                      className={`transition-colors hover:bg-muted/30 ${
+                        result.success ? 'bg-success/5' : 'bg-destructive/5'
+                      }`}
+                    >
+                      <td className="px-4 py-3 text-sm text-center text-muted-foreground font-mono">
+                        {index + 1}
+                      </td>
+                      <td className="px-4 py-3 text-sm font-medium text-foreground">
+                        {result.email}
+                      </td>
+                      <td className="px-4 py-3">
+                        {result.success ? (
+                          <Badge variant="success" className="bg-success/10 text-success">
+                            <CheckCircle2 className="h-3 w-3 mr-1" />
+                            Success
+                          </Badge>
+                        ) : (
+                          <Badge variant="destructive" className="bg-destructive/10">
+                            <XCircle className="h-3 w-3 mr-1" />
+                            Failed
+                          </Badge>
+                        )}
+                      </td>
+                      <td className="px-4 py-3 text-sm text-foreground">
+                        {result.success ? (
+                          <span className="font-medium">Ticket #{result.ticketNumber} created</span>
+                        ) : (
+                          <span className="text-destructive">{result.error}</span>
+                        )}
+                      </td>
+                      <td className="px-4 py-3 text-center">
+                        <Dialog>
+                          <DialogTrigger asChild>
+                            <Button variant="ghost" size="sm" className="h-7 w-7 p-0">
+                              <Eye className="h-3 w-3" />
+                            </Button>
+                          </DialogTrigger>
+                          <DialogContent className="max-w-3xl bg-card border-border shadow-large">
+                            <DialogHeader>
+                              <DialogTitle className="flex items-center space-x-2">
+                                <Eye className="h-4 w-4" />
+                                <span>
+                                  {result.success 
+                                    ? `Full Response - Ticket #${result.ticketNumber}`
+                                    : `Error Response - ${result.email}`
+                                  }
+                                </span>
+                              </DialogTitle>
+                            </DialogHeader>
+                            <div className="max-h-96 overflow-y-auto">
+                              <pre className="bg-muted/50 p-4 rounded-lg text-xs font-mono text-foreground border border-border">
+                                {JSON.stringify(result.fullResponse, null, 2)}
+                              </pre>
+                            </div>
+                          </DialogContent>
+                        </Dialog>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+
+        {isComplete && (
+          <div className="mt-6 p-4 bg-gradient-success rounded-lg border border-success/20">
+            <div className="flex items-center justify-center space-x-2 text-success-foreground">
+              <CheckCircle2 className="h-5 w-5" />
+              <span className="font-medium">Processing Complete!</span>
+            </div>
+            <p className="text-center text-sm text-success-foreground/80 mt-1">
+              Successfully processed {successCount} out of {totalTickets} tickets
+            </p>
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+};
