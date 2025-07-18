@@ -5,13 +5,18 @@ import { Badge } from '@/components/ui/badge';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
 import { CheckCircle2, XCircle, Eye, Hash, Mail, Clock, BarChart3 } from 'lucide-react';
 
-// Make sure this interface is exported
+// This interface is already correctly updated from your version
 export interface TicketResult {
   email: string;
   success: boolean;
   ticketNumber?: string;
   error?: string;
-  fullResponse?: any;
+  details?: string;
+  fullResponse?: any | {
+    ticketCreate?: any;
+    sendReply?: any;
+    verifyEmail?: any;
+  };
 }
 
 interface ResultsDisplayProps {
@@ -22,7 +27,6 @@ interface ResultsDisplayProps {
   countdown: number;
 }
 
-// Make sure the component itself is exported
 export const ResultsDisplay: React.FC<ResultsDisplayProps> = ({ 
   results, 
   isProcessing, 
@@ -145,7 +149,7 @@ export const ResultsDisplay: React.FC<ResultsDisplayProps> = ({
                       </td>
                       <td className="px-4 py-3 text-sm text-foreground">
                         {result.success ? (
-                          <span className="font-medium">Ticket #{result.ticketNumber} created</span>
+                          <span className="font-medium">{result.details || `Ticket #${result.ticketNumber} created`}</span>
                         ) : (
                           <span className="text-destructive">{result.error}</span>
                         )}
@@ -169,11 +173,43 @@ export const ResultsDisplay: React.FC<ResultsDisplayProps> = ({
                                 </span>
                               </DialogTitle>
                             </DialogHeader>
-                            <div className="max-h-96 overflow-y-auto">
-                              <pre className="bg-muted/50 p-4 rounded-lg text-xs font-mono text-foreground border border-border">
-                                {JSON.stringify(result.fullResponse, null, 2)}
-                              </pre>
+                            {/* --- START: MODIFICATION --- */}
+                            {/* This is the new smart logic to display one or two text areas */}
+                            <div className="max-h-[60vh] overflow-y-auto space-y-4 p-1">
+                              {result.fullResponse?.ticketCreate ? (
+                                <>
+                                  <div>
+                                    <h4 className="text-sm font-semibold mb-2 text-foreground">Ticket Creation Response</h4>
+                                    <pre className="bg-muted/50 p-4 rounded-lg text-xs font-mono text-foreground border border-border">
+                                      {JSON.stringify(result.fullResponse.ticketCreate, null, 2)}
+                                    </pre>
+                                  </div>
+                                  {result.fullResponse.sendReply && (
+                                    <div>
+                                      <h4 className="text-sm font-semibold mb-2 text-foreground">Send Reply Response</h4>
+                                      <pre className="bg-muted/50 p-4 rounded-lg text-xs font-mono text-foreground border border-border">
+                                        {JSON.stringify(result.fullResponse.sendReply, null, 2)}
+                                      </pre>
+                                    </div>
+                                  )}
+                                  {result.fullResponse.verifyEmail && (
+                                    <div>
+                                      <h4 className="text-sm font-semibold mb-2 text-foreground">Email Verification Response</h4>
+                                      <pre className="bg-muted/50 p-4 rounded-lg text-xs font-mono text-foreground border border-border">
+                                        {JSON.stringify(result.fullResponse.verifyEmail, null, 2)}
+                                      </pre>
+                                    </div>
+                                  )}
+                                </>
+                              ) : (
+                                <div>
+                                  <pre className="bg-muted/50 p-4 rounded-lg text-xs font-mono text-foreground border border-border">
+                                    {JSON.stringify(result.fullResponse, null, 2)}
+                                  </pre>
+                                </div>
+                              )}
                             </div>
+                            {/* --- END: MODIFICATION --- */}
                           </DialogContent>
                         </Dialog>
                       </td>

@@ -13,6 +13,14 @@ interface Profile {
 type ApiStatus = {
     status: 'loading' | 'success' | 'error';
     message: string;
+    // We expect the fullResponse to potentially contain our new agentInfo
+    fullResponse?: {
+      agentInfo?: {
+        firstName?: string;
+        lastName?: string;
+        orgName?: string;
+      }
+    }
 };
 
 interface ProfileSelectorProps {
@@ -91,16 +99,32 @@ export const ProfileSelector: React.FC<ProfileSelectorProps> = ({
                 </Button>
 
               </div>
-              <div className="space-y-1 text-sm">
-                <div className="flex justify-between">
-                  <span className="text-muted-foreground">Organization ID:</span>
-                  <span className="font-mono text-foreground">{selectedProfile.orgId}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-muted-foreground">Department ID:</span>
-                  <span className="font-mono text-foreground">{selectedProfile.defaultDepartmentId}</span>
-                </div>
+               {/* --- START: MODIFICATION --- */}
+               <div className="space-y-1 text-sm">
+                  {/* We check if the API status is 'success' and if the agentInfo exists before trying to display it */}
+                  {apiStatus.status === 'success' && apiStatus.fullResponse?.agentInfo && (
+                      <>
+                          <div className="flex justify-between">
+                              <span className="text-muted-foreground">Agent Name:</span>
+                              <span className="font-medium text-foreground">{apiStatus.fullResponse.agentInfo.firstName} {apiStatus.fullResponse.agentInfo.lastName}</span>
+                          </div>
+                          <div className="flex justify-between">
+                              <span className="text-muted-foreground">Organization:</span>
+                              <span className="font-medium text-foreground">{apiStatus.fullResponse.agentInfo.orgName}</span>
+                          </div>
+                      </>
+                  )}
+                  {/* The original IDs are still displayed below */}
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">Organization ID:</span>
+                    <span className="font-mono text-foreground">{selectedProfile.orgId}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">Department ID:</span>
+                    <span className="font-mono text-foreground">{selectedProfile.defaultDepartmentId}</span>
+                  </div>
               </div>
+              {/* --- END: MODIFICATION --- */}
             </div>
           )}
         </div>

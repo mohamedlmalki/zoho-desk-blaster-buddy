@@ -6,23 +6,33 @@ import { Textarea } from '@/components/ui/textarea';
 import { Label } from '@/components/ui/label';
 import { Badge } from '@/components/ui/badge';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
-import { Send, Eye, Mail, Clock, MessageSquare, Users, Pause, Play, Square } from 'lucide-react';
+// --- START: MODIFICATION 1 ---
+// Import the new icons for our options and the Checkbox component
+import { Send, Eye, Mail, Clock, MessageSquare, Users, Pause, Play, Square, Bot, MailCheck } from 'lucide-react';
+import { Checkbox } from '@/components/ui/checkbox';
+// --- END: MODIFICATION 1 ---
 
+
+// --- START: MODIFICATION 2 ---
+// Update the form data interface to include our new boolean options
 interface TicketFormData {
   emails: string;
   subject: string;
   description: string;
   delay: number;
+  sendDirectReply: boolean;
+  verifyEmail: boolean;
 }
 
 interface TicketFormProps {
-  onSubmit: (data: TicketFormData) => void;
+  onSubmit: (data: TicketFormData) => void; // Update this to pass the full form data
   isProcessing: boolean;
   isPaused: boolean;
   onPauseResume: () => void;
   onEndJob: () => void;
   onSendTest: (data: { email: string, subject: string, description: string }) => void;
 }
+// --- END: MODIFICATION 2 ---
 
 export const TicketForm: React.FC<TicketFormProps> = ({ 
   onSubmit, 
@@ -32,12 +42,18 @@ export const TicketForm: React.FC<TicketFormProps> = ({
   onEndJob,
   onSendTest,
 }) => {
+  // --- START: MODIFICATION 3 ---
+  // Add our new options to the component's state
   const [formData, setFormData] = useState<TicketFormData>({
     emails: '',
     subject: '',
     description: '',
     delay: 1,
+    sendDirectReply: false, // Default to false
+    verifyEmail: false,     // Default to false
   });
+  // --- END: MODIFICATION 3 ---
+
   const [testEmail, setTestEmail] = useState('');
 
   const emailCount = formData.emails
@@ -46,12 +62,20 @@ export const TicketForm: React.FC<TicketFormProps> = ({
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
+    // The full formData, including our new options, is now sent
     onSubmit(formData);
   };
 
-  const handleInputChange = (field: keyof TicketFormData, value: string | number) => {
+  const handleInputChange = (field: keyof Omit<TicketFormData, 'sendDirectReply' | 'verifyEmail'>, value: string | number) => {
     setFormData(prev => ({ ...prev, [field]: value }));
   };
+
+  // --- START: MODIFICATION 4 ---
+  // Add a new handler specifically for our checkboxes
+  const handleCheckboxChange = (field: 'sendDirectReply' | 'verifyEmail', checked: boolean) => {
+    setFormData(prev => ({...prev, [field]: checked}));
+  }
+  // --- END: MODIFICATION 4 ---
 
   const handleTestClick = () => {
     onSendTest({
@@ -161,6 +185,42 @@ export const TicketForm: React.FC<TicketFormProps> = ({
                   <span className="text-sm text-muted-foreground">seconds</span>
                 </div>
               </div>
+
+              {/* --- START: MODIFICATION 5 --- */}
+              {/* This is the new section for our optional features */}
+              <div className="space-y-2 pt-2">
+                  <Label className="flex items-center space-x-2">
+                    <Bot className="h-4 w-4" />
+                    <span>Optional Email Actions</span>
+                  </Label>
+                  <div className="space-y-3 rounded-lg bg-muted/30 p-4 border border-border">
+                    <div className="flex items-start space-x-3">
+                        <Checkbox
+                            id="sendDirectReply"
+                            checked={formData.sendDirectReply}
+                            onCheckedChange={(checked) => handleCheckboxChange('sendDirectReply', !!checked)}
+                            disabled={isProcessing || formData.verifyEmail}
+                        />
+                        <div className="grid gap-1.5 leading-none">
+                            <Label htmlFor="sendDirectReply" className="font-medium hover:cursor-pointer">Send Direct Public Reply</Label>
+                            <p className="text-xs text-muted-foreground">Sends the description as an email reply. Disables Zoho's internal automations for this ticket.</p>
+                        </div>
+                    </div>
+                     <div className="flex items-start space-x-3">
+                        <Checkbox
+                            id="verifyEmail"
+                            checked={formData.verifyEmail}
+                            onCheckedChange={(checked) => handleCheckboxChange('verifyEmail', !!checked)}
+                            disabled={isProcessing || formData.sendDirectReply}
+                        />
+                        <div className="grid gap-1.5 leading-none">
+                            <Label htmlFor="verifyEmail" className="font-medium hover:cursor-pointer">Verify Automation Email</Label>
+                            <p className="text-xs text-muted-foreground">Slower. Waits and checks if Zoho's automation email was sent.</p>
+                        </div>
+                    </div>
+                  </div>
+              </div>
+              {/* --- END: MODIFICATION 5 --- */}
 
               <div className="space-y-2">
                 <div className="flex items-center justify-between">

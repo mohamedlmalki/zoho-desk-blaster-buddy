@@ -20,6 +20,8 @@ interface TicketFormData {
   subject: string;
   description: string;
   delay: number;
+  sendDirectReply: boolean;
+  verifyEmail: boolean;
 }
 
 type ApiStatus = {
@@ -96,6 +98,19 @@ export const ZohoDashboard: React.FC = () => {
     });
 
     socket.on('ticketResult', (result: TicketResult) => setResults(prev => [...prev, result]));
+    
+    // --- START: MODIFICATION ---
+    // This new listener handles the real-time updates from the background verification process
+    socket.on('ticketUpdate', (updateData: { ticketNumber: string, details: string, fullResponse: any }) => {
+        setResults(prevResults => 
+            prevResults.map(result => 
+                result.ticketNumber === updateData.ticketNumber 
+                    ? { ...result, details: updateData.details, fullResponse: updateData.fullResponse } 
+                    : result
+            )
+        );
+    });
+    // --- END: MODIFICATION ---
 
     socket.on('bulkComplete', () => {
       setIsProcessing(false);
@@ -234,6 +249,8 @@ export const ZohoDashboard: React.FC = () => {
     successCount: results.filter(r => r.success).length,
     errorCount: results.filter(r => !r.success).length,
     processingTime,
+    totalToProcess: totalTicketsToProcess,
+    isProcessing: isProcessing,
   };
 
   return (
