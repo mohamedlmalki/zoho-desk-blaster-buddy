@@ -2,7 +2,10 @@ import React from 'react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Button } from '@/components/ui/button';
-import { User, Building, AlertCircle, CheckCircle, Loader } from 'lucide-react';
+// --- START: MODIFICATION ---
+// Import the RefreshCw icon for our new button
+import { User, Building, AlertCircle, CheckCircle, Loader, MailWarning, RefreshCw } from 'lucide-react';
+// --- END: MODIFICATION ---
 
 interface Profile {
   profileName: string;
@@ -13,7 +16,6 @@ interface Profile {
 type ApiStatus = {
     status: 'loading' | 'success' | 'error';
     message: string;
-    // We expect the fullResponse to potentially contain our new agentInfo
     fullResponse?: {
       agentInfo?: {
         firstName?: string;
@@ -29,6 +31,11 @@ interface ProfileSelectorProps {
   onProfileChange: (profileName: string) => void;
   apiStatus: ApiStatus;
   onShowStatus: () => void;
+  onFetchFailures: () => void;
+  // --- START: MODIFICATION ---
+  // Add a new prop for the manual verify handler
+  onManualVerify: () => void;
+  // --- END: MODIFICATION ---
 }
 
 export const ProfileSelector: React.FC<ProfileSelectorProps> = ({
@@ -37,6 +44,8 @@ export const ProfileSelector: React.FC<ProfileSelectorProps> = ({
   onProfileChange,
   apiStatus,
   onShowStatus,
+  onFetchFailures,
+  onManualVerify, // Get the new handler from props
 }) => {
   const getBadgeProps = () => {
     switch (apiStatus.status) {
@@ -93,15 +102,32 @@ export const ProfileSelector: React.FC<ProfileSelectorProps> = ({
               <div className="flex items-center justify-between mb-2">
                 <span className="text-sm font-medium text-foreground">Active Profile</span>
                 
-                <Button variant={badgeProps.variant} size="sm" onClick={onShowStatus}>
-                    {badgeProps.icon}
-                    {badgeProps.text}
-                </Button>
-
+                <div className="flex items-center space-x-2">
+                  <Button variant="outline" size="sm" onClick={onFetchFailures}>
+                      <MailWarning className="h-4 w-4 mr-2"/>
+                      View Email Failures
+                  </Button>
+                  {/* This button is now guaranteed to be clickable to show the status */}
+                  <Button variant={badgeProps.variant} size="sm" onClick={onShowStatus}>
+                      {badgeProps.icon}
+                      {badgeProps.text}
+                  </Button>
+                  {/* --- START: MODIFICATION --- */}
+                  {/* Add the new manual verify button */}
+                  <Button 
+                    variant="outline" 
+                    size="icon" 
+                    className="h-8 w-8" 
+                    onClick={onManualVerify}
+                    disabled={apiStatus.status === 'loading'}
+                  >
+                      <RefreshCw className="h-4 w-4"/>
+                  </Button>
+                  {/* --- END: MODIFICATION --- */}
+                </div>
+                
               </div>
-               {/* --- START: MODIFICATION --- */}
                <div className="space-y-1 text-sm">
-                  {/* We check if the API status is 'success' and if the agentInfo exists before trying to display it */}
                   {apiStatus.status === 'success' && apiStatus.fullResponse?.agentInfo && (
                       <>
                           <div className="flex justify-between">
@@ -114,7 +140,6 @@ export const ProfileSelector: React.FC<ProfileSelectorProps> = ({
                           </div>
                       </>
                   )}
-                  {/* The original IDs are still displayed below */}
                   <div className="flex justify-between">
                     <span className="text-muted-foreground">Organization ID:</span>
                     <span className="font-mono text-foreground">{selectedProfile.orgId}</span>
@@ -124,7 +149,6 @@ export const ProfileSelector: React.FC<ProfileSelectorProps> = ({
                     <span className="font-mono text-foreground">{selectedProfile.defaultDepartmentId}</span>
                   </div>
               </div>
-              {/* --- END: MODIFICATION --- */}
             </div>
           )}
         </div>

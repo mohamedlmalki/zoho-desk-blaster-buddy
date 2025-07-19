@@ -1,22 +1,18 @@
-import React from 'react';
+import React, { useMemo } from 'react'; // Import useMemo
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
-import { CheckCircle2, XCircle, Eye, Hash, Mail, Clock, BarChart3 } from 'lucide-react';
+import { Input } from '@/components/ui/input'; // Import Input
+import { CheckCircle2, XCircle, Eye, Hash, Mail, Clock, BarChart3, Download, Search } from 'lucide-react'; // Import more icons
 
-// This interface is already correctly updated from your version
 export interface TicketResult {
   email: string;
   success: boolean;
   ticketNumber?: string;
   error?: string;
   details?: string;
-  fullResponse?: any | {
-    ticketCreate?: any;
-    sendReply?: any;
-    verifyEmail?: any;
-  };
+  fullResponse?: any;
 }
 
 interface ResultsDisplayProps {
@@ -25,6 +21,8 @@ interface ResultsDisplayProps {
   isComplete: boolean;
   totalTickets: number;
   countdown: number;
+  filterText: string;
+  onFilterTextChange: (text: string) => void;
 }
 
 export const ResultsDisplay: React.FC<ResultsDisplayProps> = ({ 
@@ -32,11 +30,49 @@ export const ResultsDisplay: React.FC<ResultsDisplayProps> = ({
   isProcessing, 
   isComplete,
   totalTickets,
-  countdown
+  countdown,
+  filterText,
+  onFilterTextChange,
 }) => {
+
+  // --- START: NEW FEATURE 1 ---
+  // Memoize the filtered results so it only recalculates when needed
+  const filteredResults = useMemo(() => {
+    if (!filterText) return results;
+    return results.filter(r => 
+      r.email.toLowerCase().includes(filterText.toLowerCase()) ||
+      (r.details || '').toLowerCase().includes(filterText.toLowerCase()) ||
+      (r.error || '').toLowerCase().includes(filterText.toLowerCase()) ||
+      (r.success ? 'success' : 'failed').includes(filterText.toLowerCase())
+    );
+  }, [results, filterText]);
+  // --- END: NEW FEATURE 1 ---
+
   const successCount = results.filter(r => r.success).length;
   const errorCount = results.filter(r => !r.success).length;
   const progressPercent = totalTickets > 0 ? (results.length / totalTickets) * 100 : 0;
+
+  // --- START: NEW FEATURE 2 ---
+  // Logic for the export button
+  const handleExport = () => {
+    const header = "Email,Status,Details\n";
+    const csvContent = filteredResults.map(r => {
+      const status = r.success ? 'Success' : 'Failed';
+      const details = (r.details || r.error || '').replace(/"/g, '""'); // Escape double quotes
+      return `${r.email},${status},"${details}"`;
+    }).join('\n');
+
+    const blob = new Blob([header + csvContent], { type: 'text/csv;charset=utf-8;' });
+    const link = document.createElement("a");
+    const url = URL.createObjectURL(blob);
+    link.setAttribute("href", url);
+    link.setAttribute("download", "ticket-results.csv");
+    link.style.visibility = 'hidden';
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+  // --- END: NEW FEATURE 2 ---
 
   if (results.length === 0 && !isProcessing) {
     return null;
@@ -93,8 +129,26 @@ export const ResultsDisplay: React.FC<ResultsDisplayProps> = ({
             </div>
           </div>
         )}
-
+        
         {results.length > 0 && (
+          <div className="flex items-center justify-between mb-4">
+            <div className="relative w-full max-w-sm">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+              <Input
+                placeholder="Filter results..."
+                value={filterText}
+                onChange={(e) => onFilterTextChange(e.target.value)}
+                className="pl-10"
+              />
+            </div>
+            <Button variant="outline" onClick={handleExport} disabled={filteredResults.length === 0}>
+              <Download className="h-4 w-4 mr-2"/>
+              Export ({filteredResults.length})
+            </Button>
+          </div>
+        )}
+
+        {filteredResults.length > 0 && (
           <div className="overflow-hidden rounded-lg border border-border">
             <div className="overflow-x-auto">
               <table className="w-full">
@@ -121,7 +175,7 @@ export const ResultsDisplay: React.FC<ResultsDisplayProps> = ({
                   </tr>
                 </thead>
                 <tbody className="bg-card divide-y divide-border">
-                  {results.map((result, index) => (
+                  {filteredResults.map((result, index) => (
                     <tr 
                       key={index}
                       className={`transition-colors hover:bg-muted/30 ${
@@ -148,11 +202,9 @@ export const ResultsDisplay: React.FC<ResultsDisplayProps> = ({
                         )}
                       </td>
                       <td className="px-4 py-3 text-sm text-foreground">
-                        {result.success ? (
-                          <span className="font-medium">{result.details || `Ticket #${result.ticketNumber} created`}</span>
-                        ) : (
-                          <span className="text-destructive">{result.error}</span>
-                        )}
+                        <span className={!result.success ? "text-destructive font-medium" : "font-medium"}>
+                          {result.details || result.error}
+                        </span>
                       </td>
                       <td className="px-4 py-3 text-center">
                         <Dialog>
@@ -173,8 +225,6 @@ export const ResultsDisplay: React.FC<ResultsDisplayProps> = ({
                                 </span>
                               </DialogTitle>
                             </DialogHeader>
-                            {/* --- START: MODIFICATION --- */}
-                            {/* This is the new smart logic to display one or two text areas */}
                             <div className="max-h-[60vh] overflow-y-auto space-y-4 p-1">
                               {result.fullResponse?.ticketCreate ? (
                                 <>
@@ -184,7 +234,8 @@ export const ResultsDisplay: React.FC<ResultsDisplayProps> = ({
                                       {JSON.stringify(result.fullResponse.ticketCreate, null, 2)}
                                     </pre>
                                   </div>
-                                  {result.fullResponse.sendReply && (
+
+                                  {'sendReply' in result.fullResponse && (
                                     <div>
                                       <h4 className="text-sm font-semibold mb-2 text-foreground">Send Reply Response</h4>
                                       <pre className="bg-muted/50 p-4 rounded-lg text-xs font-mono text-foreground border border-border">
@@ -192,7 +243,8 @@ export const ResultsDisplay: React.FC<ResultsDisplayProps> = ({
                                       </pre>
                                     </div>
                                   )}
-                                  {result.fullResponse.verifyEmail && (
+
+                                  {'verifyEmail' in result.fullResponse && (
                                     <div>
                                       <h4 className="text-sm font-semibold mb-2 text-foreground">Email Verification Response</h4>
                                       <pre className="bg-muted/50 p-4 rounded-lg text-xs font-mono text-foreground border border-border">
@@ -209,7 +261,6 @@ export const ResultsDisplay: React.FC<ResultsDisplayProps> = ({
                                 </div>
                               )}
                             </div>
-                            {/* --- END: MODIFICATION --- */}
                           </DialogContent>
                         </Dialog>
                       </td>

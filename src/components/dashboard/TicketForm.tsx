@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react'; // Import useRef
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -6,15 +6,10 @@ import { Textarea } from '@/components/ui/textarea';
 import { Label } from '@/components/ui/label';
 import { Badge } from '@/components/ui/badge';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
-// --- START: MODIFICATION 1 ---
-// Import the new icons for our options and the Checkbox component
-import { Send, Eye, Mail, Clock, MessageSquare, Users, Pause, Play, Square, Bot, MailCheck } from 'lucide-react';
+import { Send, Eye, Mail, Clock, MessageSquare, Users, Pause, Play, Square, Bot, Upload } from 'lucide-react'; // Import Upload icon
 import { Checkbox } from '@/components/ui/checkbox';
-// --- END: MODIFICATION 1 ---
 
 
-// --- START: MODIFICATION 2 ---
-// Update the form data interface to include our new boolean options
 interface TicketFormData {
   emails: string;
   subject: string;
@@ -25,14 +20,13 @@ interface TicketFormData {
 }
 
 interface TicketFormProps {
-  onSubmit: (data: TicketFormData) => void; // Update this to pass the full form data
+  onSubmit: (data: TicketFormData) => void; 
   isProcessing: boolean;
   isPaused: boolean;
   onPauseResume: () => void;
   onEndJob: () => void;
-  onSendTest: (data: { email: string, subject: string, description: string }) => void;
+  onSendTest: (data: { email: string, subject: string, description: string, sendDirectReply: boolean, verifyEmail: boolean }) => void;
 }
-// --- END: MODIFICATION 2 ---
 
 export const TicketForm: React.FC<TicketFormProps> = ({ 
   onSubmit, 
@@ -42,19 +36,17 @@ export const TicketForm: React.FC<TicketFormProps> = ({
   onEndJob,
   onSendTest,
 }) => {
-  // --- START: MODIFICATION 3 ---
-  // Add our new options to the component's state
   const [formData, setFormData] = useState<TicketFormData>({
     emails: '',
     subject: '',
     description: '',
     delay: 1,
-    sendDirectReply: false, // Default to false
-    verifyEmail: false,     // Default to false
+    sendDirectReply: false,
+    verifyEmail: false,
   });
-  // --- END: MODIFICATION 3 ---
 
   const [testEmail, setTestEmail] = useState('');
+  const fileInputRef = useRef<HTMLInputElement>(null); // Ref for file input
 
   const emailCount = formData.emails
     .split('\n')
@@ -62,7 +54,6 @@ export const TicketForm: React.FC<TicketFormProps> = ({
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    // The full formData, including our new options, is now sent
     onSubmit(formData);
   };
 
@@ -70,20 +61,36 @@ export const TicketForm: React.FC<TicketFormProps> = ({
     setFormData(prev => ({ ...prev, [field]: value }));
   };
 
-  // --- START: MODIFICATION 4 ---
-  // Add a new handler specifically for our checkboxes
   const handleCheckboxChange = (field: 'sendDirectReply' | 'verifyEmail', checked: boolean) => {
     setFormData(prev => ({...prev, [field]: checked}));
   }
-  // --- END: MODIFICATION 4 ---
 
   const handleTestClick = () => {
     onSendTest({
         email: testEmail,
         subject: formData.subject,
         description: formData.description,
+        sendDirectReply: formData.sendDirectReply,
+        verifyEmail: formData.verifyEmail,
     });
   };
+
+  // --- START: NEW FEATURE ---
+  // Logic to handle file import
+  const handleFileImport = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (file) {
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        const content = e.target?.result as string;
+        // Extracts emails from the file content and joins them with newlines
+        const emails = content.match(/([a-zA-Z0-9._-]+@[a-zA-Z0-9._-]+\.[a-zA-Z0-9_-]+)/gi) || [];
+        setFormData(prev => ({ ...prev, emails: emails.join('\n') }));
+      };
+      reader.readAsText(file);
+    }
+  };
+  // --- END: NEW FEATURE ---
 
   return (
     <Card className="shadow-medium hover:shadow-large transition-all duration-300">
@@ -107,10 +114,31 @@ export const TicketForm: React.FC<TicketFormProps> = ({
                     <Mail className="h-4 w-4" />
                     <span>Recipient Emails</span>
                   </Label>
-                  <Badge variant="secondary" className="text-xs">
-                    <Users className="h-3 w-3 mr-1" />
-                    {emailCount} recipients
-                  </Badge>
+                  {/* --- START: NEW FEATURE --- */}
+                  <div className='flex items-center space-x-2'>
+                    <input
+                      type="file"
+                      ref={fileInputRef}
+                      className="hidden"
+                      accept=".csv,.txt"
+                      onChange={handleFileImport}
+                    />
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={() => fileInputRef.current?.click()}
+                      disabled={isProcessing}
+                    >
+                      <Upload className="h-3 w-3 mr-2" />
+                      Import
+                    </Button>
+                    <Badge variant="secondary" className="text-xs">
+                      <Users className="h-3 w-3 mr-1" />
+                      {emailCount} recipients
+                    </Badge>
+                  </div>
+                  {/* --- END: NEW FEATURE --- */}
                 </div>
                 <Textarea
                   id="emails"
@@ -122,10 +150,10 @@ export const TicketForm: React.FC<TicketFormProps> = ({
                   disabled={isProcessing}
                 />
                 <p className="text-xs text-muted-foreground">
-                  Enter one email address per line
+                  Enter one email address per line, or import from a .csv/.txt file.
                 </p>
                 <div className="pt-4 border-t border-dashed">
-                    <Label htmlFor="test-email" className="text-xs text-muted-foreground">Send a single test ticket</Label>
+                    <Label htmlFor="test-email" className="text-xs text-muted-foreground">Send a single test ticket (with options enabled above)</Label>
                     <div className="flex items-center space-x-2 mt-2">
                         <Input
                             id="test-email"
@@ -186,8 +214,6 @@ export const TicketForm: React.FC<TicketFormProps> = ({
                 </div>
               </div>
 
-              {/* --- START: MODIFICATION 5 --- */}
-              {/* This is the new section for our optional features */}
               <div className="space-y-2 pt-2">
                   <Label className="flex items-center space-x-2">
                     <Bot className="h-4 w-4" />
@@ -220,7 +246,6 @@ export const TicketForm: React.FC<TicketFormProps> = ({
                     </div>
                   </div>
               </div>
-              {/* --- END: MODIFICATION 5 --- */}
 
               <div className="space-y-2">
                 <div className="flex items-center justify-between">

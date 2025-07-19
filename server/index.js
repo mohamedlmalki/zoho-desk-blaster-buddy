@@ -123,7 +123,7 @@ io.on('connection', (socket) => {
     };
 
     socket.on('sendTestTicket', async (data) => {
-        const { email, subject, description, selectedProfileName } = data;
+        const { email, subject, description, selectedProfileName, sendDirectReply, verifyEmail } = data;
         if (!email || !selectedProfileName) {
             return socket.emit('testTicketResult', { success: false, error: 'Missing email or profile.' });
         }
@@ -133,17 +133,40 @@ io.on('connection', (socket) => {
             if (!activeProfile) {
                 return socket.emit('testTicketResult', { success: false, error: 'Profile not found.' });
             }
+            
             const ticketData = { subject, description, departmentId: activeProfile.defaultDepartmentId, contact: { email } };
-            const response = await makeApiCall('post', '/api/v1/tickets', ticketData, activeProfile);
-            socket.emit('testTicketResult', { success: true, fullResponse: response.data });
+            const ticketResponse = await makeApiCall('post', '/api/v1/tickets', ticketData, activeProfile);
+            const newTicket = ticketResponse.data;
+            let fullResponseData = { ticketCreate: newTicket };
+
+            if (sendDirectReply) {
+                try {
+                    const replyData = {
+                        fromEmailAddress: activeProfile.fromEmailAddress,
+                        to: email,
+                        content: description,
+                        contentType: 'html',
+                        channel: 'EMAIL'
+                    };
+                    const replyResponse = await makeApiCall('post', `/api/v1/tickets/${newTicket.id}/sendReply`, replyData, activeProfile);
+                    fullResponseData.sendReply = replyResponse.data;
+                } catch (replyError) {
+                    fullResponseData.sendReply = { error: replyError.response?.data || { message: replyError.message } };
+                }
+            }
+
+            socket.emit('testTicketResult', { success: true, fullResponse: fullResponseData });
+
+            if (verifyEmail) {
+                verifyTicketEmail(newTicket, activeProfile, socket, 'testTicketVerificationResult');
+            }
+
         } catch (error) {
             const errorMessage = error.response?.data?.message || error.message;
             socket.emit('testTicketResult', { success: false, error: errorMessage, fullResponse: error.response?.data });
         }
     });
 
-    // --- START: MODIFICATION ---
-    // This entire function is now updated with the new asynchronous logic
     socket.on('startBulkCreate', async (data) => {
         const { emails, subject, description, delay, selectedProfileName, sendDirectReply, verifyEmail } = data;
         
@@ -158,8 +181,7 @@ io.on('connection', (socket) => {
             if (sendDirectReply && !activeProfile.fromEmailAddress) {
                 throw new Error(`Profile "${selectedProfileName}" is missing "fromEmailAddress".`);
             }
-
-            // Phase 1: Create all tickets quickly
+            
             for (let i = 0; i < emails.length; i++) {
                 if (!activeJobs[socket.id] || activeJobs[socket.id].status === 'ended') break;
                 while (activeJobs[socket.id]?.status === 'paused') {
@@ -172,24 +194,44 @@ io.on('connection', (socket) => {
                 if (!email.trim()) continue;
 
                 const ticketData = { subject, description, departmentId: activeProfile.defaultDepartmentId, contact: { email } };
-
+                
                 try {
                     const ticketResponse = await makeApiCall('post', '/api/v1/tickets', ticketData, activeProfile);
                     const newTicket = ticketResponse.data;
-                    const successMessage = `Ticket #${newTicket.ticketNumber} created.`;
+                    let successMessage = `Ticket #${newTicket.ticketNumber} created.`;
+                    let fullResponseData = { ticketCreate: newTicket };
+                    let overallSuccess = true; 
 
-                    // Immediately emit the creation success
+                    if (sendDirectReply) {
+                        try {
+                            const replyData = {
+                                fromEmailAddress: activeProfile.fromEmailAddress,
+                                to: email,
+                                content: description,
+                                contentType: 'html',
+                                channel: 'EMAIL'
+                            };
+
+                            const replyResponse = await makeApiCall('post', `/api/v1/tickets/${newTicket.id}/sendReply`, replyData, activeProfile);
+                            
+                            successMessage = `Ticket #${newTicket.ticketNumber} created and reply sent.`;
+                            fullResponseData.sendReply = replyResponse.data;
+                        } catch (replyError) {
+                            overallSuccess = false;
+                            successMessage = `Ticket #${newTicket.ticketNumber} created, but reply failed: ${replyError.response?.data?.message || replyError.message}`;
+                            fullResponseData.sendReply = { error: replyError.response?.data || { message: replyError.message } };
+                        }
+                    }
+
                     socket.emit('ticketResult', { 
                         email, 
-                        success: true, 
+                        success: overallSuccess,
                         ticketNumber: newTicket.ticketNumber, 
                         details: successMessage,
-                        fullResponse: { ticketCreate: newTicket }
+                        fullResponse: fullResponseData
                     });
 
-                    // If verification is needed, start it in the background without waiting for it
                     if (verifyEmail) {
-                        // "fire and forget" this function
                         verifyTicketEmail(newTicket, activeProfile, socket);
                     }
 
@@ -213,20 +255,14 @@ io.on('connection', (socket) => {
             }
         }
     });
-    // --- END: MODIFICATION ---
 
-    // --- START: NEW HELPER FUNCTION ---
-    // This new function runs in the background to verify emails
-    const verifyTicketEmail = async (ticket, profile, socket) => {
+    const verifyTicketEmail = async (ticket, profile, socket, resultEventName = 'ticketUpdate') => {
         try {
-            // 1. Wait for 10 seconds
             await new Promise(resolve => setTimeout(resolve, 10000));
             
-            // 2. Make two separate API calls for history
             const workflowHistoryResponse = await makeApiCall('get', `/api/v1/tickets/${ticket.id}/History?eventFilter=WorkflowHistory`, null, profile);
             const notificationHistoryResponse = await makeApiCall('get', `/api/v1/tickets/${ticket.id}/History?eventFilter=NotificationRuleHistory`, null, profile);
 
-            // 3. Combine results
             const allHistoryEvents = [
                 ...(workflowHistoryResponse.data.data || []),
                 ...(notificationHistoryResponse.data.data || [])
@@ -236,12 +272,12 @@ io.on('connection', (socket) => {
             const verificationMessage = `Email verification: ${emailSent ? 'Sent' : 'Not Found'}.`;
             const finalDetails = `Ticket #${ticket.ticketNumber} created. ${verificationMessage}`;
 
-            // 4. Send a new 'ticketUpdate' message to the frontend
-            socket.emit('ticketUpdate', {
+            socket.emit(resultEventName, {
                 ticketNumber: ticket.ticketNumber,
+                success: emailSent, 
                 details: finalDetails,
                 fullResponse: {
-                    ticketCreate: ticket, // The original ticket data
+                    ticketCreate: ticket,
                     verifyEmail: {
                         workflowHistory: workflowHistoryResponse.data,
                         notificationHistory: notificationHistoryResponse.data
@@ -251,15 +287,14 @@ io.on('connection', (socket) => {
 
         } catch (error) {
             console.error(`Failed to verify email for ticket #${ticket.ticketNumber}:`, error.message);
-            // Optionally send an update on failure
-            socket.emit('ticketUpdate', {
+            socket.emit(resultEventName, {
                 ticketNumber: ticket.ticketNumber,
+                success: false,
                 details: `Ticket #${ticket.ticketNumber} created. Email verification: Failed.`,
                 fullResponse: { ticketCreate: ticket, verifyEmail: { error: error.message } }
             });
         }
     };
-    // --- END: NEW HELPER FUNCTION ---
 
     socket.on('pauseJob', () => {
         if (activeJobs[socket.id]) {
@@ -281,6 +316,25 @@ io.on('connection', (socket) => {
 
     socket.on('disconnect', () => {
         delete activeJobs[socket.id];
+    });
+
+    socket.on('getEmailFailures', async (data) => {
+        try {
+            const { selectedProfileName } = data;
+            const profiles = JSON.parse(fs.readFileSync(path.join(__dirname, 'profiles.json')));
+            const activeProfile = profiles.find(p => p.profileName === selectedProfileName);
+            if (!activeProfile) {
+                throw new Error('Profile not found for fetching email failures.');
+            }
+
+            const departmentId = activeProfile.defaultDepartmentId;
+            const response = await makeApiCall('get', `/api/v1/emailFailureAlerts?department=${departmentId}&limit=50`, null, activeProfile);
+            
+            socket.emit('emailFailuresResult', { success: true, data: response.data.data });
+        } catch (error) {
+            const errorMessage = error.response?.data?.message || 'API Error';
+            socket.emit('emailFailuresResult', { success: false, error: errorMessage });
+        }
     });
 });
 

@@ -8,6 +8,8 @@ import { ResultsDisplay, TicketResult } from './ResultsDisplay';
 import { useToast } from '@/hooks/use-toast';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
+import { Badge } from '@/components/ui/badge'; 
+import { AlertCircle, Ticket, User, Building, MailWarning, Loader2, RefreshCw } from 'lucide-react';
 
 interface Profile {
   profileName: string;
@@ -29,6 +31,18 @@ type ApiStatus = {
   message: string;
   fullResponse?: any;
 };
+
+interface EmailFailure {
+  ticketNumber: string;
+  subject: string;
+  reason: string;
+  errorMessage: string;
+  departmentName: string;
+  channel: string;
+  assignee: {
+      name: string;
+  } | null;
+}
 
 const SERVER_URL = "http://localhost:3000";
 
@@ -53,6 +67,15 @@ export const ZohoDashboard: React.FC = () => {
   const [isStatusModalOpen, setIsStatusModalOpen] = useState(false);
   const [testResult, setTestResult] = useState<any>(null);
   const [isTestModalOpen, setIsTestModalOpen] = useState(false);
+  const [isTestVerifying, setIsTestVerifying] = useState(false);
+  
+  const [emailFailures, setEmailFailures] = useState<EmailFailure[]>([]);
+  const [isFailuresModalOpen, setIsFailuresModalOpen] = useState(false);
+
+  // --- START: NEW FEATURE ---
+  // Add state for the filter text
+  const [filterText, setFilterText] = useState('');
+  // --- END: NEW FEATURE ---
 
 
   const { data: profiles = [], isLoading: profilesLoading } = useQuery<Profile[]>({
@@ -97,20 +120,45 @@ export const ZohoDashboard: React.FC = () => {
         setIsTestModalOpen(true);
     });
 
+    socket.on('testTicketVerificationResult', (result: { success: boolean, details: string, fullResponse: any }) => {
+      setIsTestVerifying(false);
+      setTestResult(prevResult => ({
+        ...prevResult,
+        fullResponse: {
+          ...prevResult.fullResponse,
+          verifyEmail: result.fullResponse.verifyEmail
+        }
+      }));
+      toast({ 
+        title: result.success ? "Test Verification Complete" : "Test Verification Failed", 
+        description: "The test popup has been updated with the result."
+      });
+    });
+
     socket.on('ticketResult', (result: TicketResult) => setResults(prev => [...prev, result]));
     
-    // --- START: MODIFICATION ---
-    // This new listener handles the real-time updates from the background verification process
-    socket.on('ticketUpdate', (updateData: { ticketNumber: string, details: string, fullResponse: any }) => {
+    socket.on('ticketUpdate', (updateData: { ticketNumber: string, success: boolean, details: string, fullResponse: any }) => {
         setResults(prevResults => 
             prevResults.map(result => 
                 result.ticketNumber === updateData.ticketNumber 
-                    ? { ...result, details: updateData.details, fullResponse: updateData.fullResponse } 
+                    ? { ...result, success: updateData.success, details: updateData.details, fullResponse: updateData.fullResponse } 
                     : result
             )
         );
     });
-    // --- END: MODIFICATION ---
+
+    socket.on('emailFailuresResult', (result: { success: boolean, data?: EmailFailure[], error?: string }) => {
+        if (result.success) {
+            setEmailFailures(result.data || []);
+            setIsFailuresModalOpen(true);
+        } else {
+            toast({
+                title: "Error Fetching Failures",
+                description: result.error,
+                variant: "destructive",
+            });
+        }
+    });
 
     socket.on('bulkComplete', () => {
       setIsProcessing(false);
@@ -192,13 +240,31 @@ export const ZohoDashboard: React.FC = () => {
       }
     }
   };
+  
+  const handleManualVerify = () => {
+    if (!selectedProfile) {
+      toast({ title: "No Profile Selected", description: "Cannot verify status without a profile.", variant: "destructive" });
+      return;
+    }
+    setApiStatus({ status: 'loading', message: 'Checking API connection...', fullResponse: null });
+    if (socket && socket.connected) {
+      socket.emit('checkApiStatus', { selectedProfileName: selectedProfile.profileName });
+    }
+    toast({ title: "Re-checking Connection..." });
+  };
 
-  const handleSendTest = (data: { email: string, subject: string, description: string }) => {
+  const handleSendTest = (data: { email: string, subject: string, description: string, sendDirectReply: boolean, verifyEmail: boolean }) => {
     if (!selectedProfile) {
         toast({ title: "No Profile Selected", description: "Please select a profile before sending a test.", variant: "destructive" });
         return;
     }
-    toast({ title: "Sending Test Ticket..." });
+    setTestResult(null);
+    setIsTestVerifying(data.verifyEmail);
+    
+    toast({ 
+      title: "Sending Test Ticket...",
+      description: data.verifyEmail ? "Verification result will appear in the popup in ~10 seconds." : ""
+    });
     socket.emit('sendTestTicket', { ...data, selectedProfileName: selectedProfile.profileName });
   };
 
@@ -217,6 +283,7 @@ export const ZohoDashboard: React.FC = () => {
     setProcessingTime('0s');
     setTotalTicketsToProcess(emails.length);
     setCurrentDelay(formData.delay);
+    setFilterText('');
     
     toast({ title: "Processing Started", description: `Creating ${emails.length} tickets...` });
 
@@ -243,6 +310,15 @@ export const ZohoDashboard: React.FC = () => {
     setResults([]);
     setTotalTicketsToProcess(0);
   };
+  
+  const handleFetchEmailFailures = () => {
+    if (!selectedProfile) {
+      toast({ title: "No Profile Selected", description: "Please select a profile first.", variant: "destructive" });
+      return;
+    }
+    toast({ title: "Fetching Email Failures..." });
+    socket.emit('getEmailFailures', { selectedProfileName: selectedProfile.profileName });
+  };
 
   const stats = {
     totalTickets: results.length,
@@ -263,6 +339,8 @@ export const ZohoDashboard: React.FC = () => {
             onProfileChange={handleProfileChange}
             apiStatus={apiStatus}
             onShowStatus={() => setIsStatusModalOpen(true)}
+            onFetchFailures={handleFetchEmailFailures}
+            onManualVerify={handleManualVerify}
           />
           <TicketForm
             onSubmit={handleFormSubmit}
@@ -272,13 +350,18 @@ export const ZohoDashboard: React.FC = () => {
             onEndJob={handleEndJob}
             onSendTest={handleSendTest}
           />
+          {/* --- START: NEW FEATURE --- */}
+          {/* Pass the filter state down to the ResultsDisplay component */}
           <ResultsDisplay
             results={results}
             isProcessing={isProcessing}
             isComplete={isComplete}
             totalTickets={totalTicketsToProcess}
             countdown={countdown}
+            filterText={filterText}
+            onFilterTextChange={setFilterText}
           />
+          {/* --- END: NEW FEATURE --- */}
         </div>
       </DashboardLayout>
       
@@ -313,12 +396,101 @@ export const ZohoDashboard: React.FC = () => {
           <DialogHeader>
             <DialogTitle>Test Ticket Response</DialogTitle>
           </DialogHeader>
-          <div className="max-h-96 overflow-y-auto">
-            <pre className="bg-muted/50 p-4 rounded-lg text-xs font-mono text-foreground border border-border">
-                {JSON.stringify(testResult, null, 2)}
-            </pre>
+          <div className="max-h-[70vh] overflow-y-auto space-y-4 p-1">
+            {testResult?.fullResponse?.ticketCreate ? (
+              <>
+                <div>
+                  <h4 className="text-sm font-semibold mb-2 text-foreground">Ticket Creation Response</h4>
+                  <pre className="bg-muted/50 p-4 rounded-lg text-xs font-mono text-foreground border border-border">
+                    {JSON.stringify(testResult.fullResponse.ticketCreate, null, 2)}
+                  </pre>
+                </div>
+
+                {testResult.fullResponse.sendReply && (
+                  <div>
+                    <h4 className="text-sm font-semibold mb-2 text-foreground">Send Reply Response</h4>
+                    <pre className="bg-muted/50 p-4 rounded-lg text-xs font-mono text-foreground border border-border">
+                      {JSON.stringify(testResult.fullResponse.sendReply, null, 2)}
+                    </pre>
+                  </div>
+                )}
+
+                {isTestVerifying && (
+                  <div className="p-4 rounded-md bg-muted/50 text-center flex items-center justify-center">
+                    <Loader2 className="h-4 w-4 mr-2 animate-spin"/>
+                    <span className="text-sm text-muted-foreground">Verifying email, please wait...</span>
+                  </div>
+                )}
+
+                {testResult.fullResponse.verifyEmail && (
+                  <div>
+                    <h4 className="text-sm font-semibold mb-2 text-foreground">Email Verification Response</h4>
+                    <pre className="bg-muted/50 p-4 rounded-lg text-xs font-mono text-foreground border border-border">
+                      {JSON.stringify(testResult.fullResponse.verifyEmail, null, 2)}
+                    </pre>
+                  </div>
+                )}
+              </>
+            ) : (
+              <pre className="bg-muted/50 p-4 rounded-lg text-xs font-mono text-foreground border border-border">
+                  {JSON.stringify(testResult, null, 2)}
+              </pre>
+            )}
           </div>
           <Button onClick={() => setIsTestModalOpen(false)}>Close</Button>
+        </DialogContent>
+      </Dialog>
+      
+      <Dialog open={isFailuresModalOpen} onOpenChange={setIsFailuresModalOpen}>
+        <DialogContent className="max-w-3xl">
+            <DialogHeader>
+                <DialogTitle>Email Delivery Failure Alerts</DialogTitle>
+                <DialogDescription>
+                    Showing recent email delivery failures for the selected department.
+                </DialogDescription>
+            </DialogHeader>
+            <div className="max-h-[60vh] overflow-y-auto -mx-6 px-6">
+              {emailFailures.length > 0 ? (
+                <div className="space-y-4">
+                  {emailFailures.map((failure, index) => (
+                    <div key={index} className="p-4 rounded-lg border bg-card">
+                      <div className="flex items-center justify-between mb-2">
+                          <div className="flex items-center space-x-2">
+                            <Ticket className="h-4 w-4 text-primary"/>
+                            <span className="font-semibold text-foreground">Ticket #{failure.ticketNumber}</span>
+                          </div>
+                          <Badge variant="destructive">Failed</Badge>
+                      </div>
+                      <p className="text-sm text-muted-foreground italic mb-3">"{failure.subject}"</p>
+                      
+                      <div className="text-xs space-y-2 mb-3">
+                          <div className="flex items-center">
+                              <Building className="h-3 w-3 mr-2 text-muted-foreground"/>
+                              <span className="text-muted-foreground mr-1">Department:</span>
+                              <span className="font-medium text-foreground">{failure.departmentName}</span>
+                          </div>
+                          <div className="flex items-center">
+                            <User className="h-3 w-3 mr-2 text-muted-foreground"/>
+                            <span className="text-muted-foreground mr-1">Assignee:</span>
+                            <span className="font-medium text-foreground">{failure.assignee?.name || 'Unassigned'}</span>
+                          </div>
+                      </div>
+
+                      <div className="p-3 rounded-md bg-muted/50 text-xs space-y-1">
+                          <p><strong className="text-foreground">Reason:</strong> {failure.reason}</p>
+                          <p><strong className="text-foreground">Error:</strong> {failure.errorMessage}</p>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="text-center py-12">
+                  <p className="font-semibold">No Failures Found</p>
+                  <p className="text-sm text-muted-foreground mt-1">There are no recorded email delivery failures for this department.</p>
+                </div>
+              )}
+            </div>
+            <Button onClick={() => setIsFailuresModalOpen(false)} className="mt-4">Close</Button>
         </DialogContent>
       </Dialog>
     </>
