@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { io, Socket } from 'socket.io-client';
 import { DashboardLayout } from './DashboardLayout';
@@ -8,9 +8,11 @@ import { ResultsDisplay, TicketResult } from './ResultsDisplay';
 import { useToast } from '@/hooks/use-toast';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
-import { Badge } from '@/components/ui/badge'; 
-import { AlertCircle, Ticket, User, Building, MailWarning, Loader2, RefreshCw } from 'lucide-react';
+import { Badge } from '@/components/ui/badge';
+import { AlertCircle, Ticket, User, Building, MailWarning, Loader2, RefreshCw, X } from 'lucide-react';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 
+// --- Interface Definitions ---
 interface Profile {
   profileName: string;
   orgId: string;
@@ -44,345 +46,435 @@ interface EmailFailure {
   } | null;
 }
 
+interface DashboardSession {
+    id: string;
+    jobId: string | null;
+    profile: Profile | null;
+    apiStatus: ApiStatus;
+    results: TicketResult[];
+    isProcessing: boolean;
+    isPaused: boolean;
+    isComplete: boolean;
+    processingStartTime: Date | null;
+    processingTime: string;
+    totalTicketsToProcess: number;
+    countdown: number;
+    currentDelay: number;
+    filterText: string;
+}
+
+
 const SERVER_URL = "http://localhost:3000";
 
-let socket: Socket;
+const createNewSession = (id: string, profile: Profile | null): DashboardSession => ({
+    id,
+    jobId: null,
+    profile,
+    apiStatus: { status: 'loading', message: 'Initializing...' },
+    results: [],
+    isProcessing: false,
+    isPaused: false,
+    isComplete: false,
+    processingStartTime: null,
+    processingTime: '0s',
+    totalTicketsToProcess: 0,
+    countdown: 0,
+    currentDelay: 1,
+    filterText: '',
+});
 
 export const ZohoDashboard: React.FC = () => {
   const { toast } = useToast();
-  
-  const [selectedProfile, setSelectedProfile] = useState<Profile | null>(null);
-  const [results, setResults] = useState<TicketResult[]>([]);
-  const [isProcessing, setIsProcessing] = useState(false);
-  const [isPaused, setIsPaused] = useState(false);
-  const [isComplete, setIsComplete] = useState(false);
-  const [processingStartTime, setProcessingStartTime] = useState<Date | null>(null);
-  const [processingTime, setProcessingTime] = useState('0s');
-  const [totalTicketsToProcess, setTotalTicketsToProcess] = useState(0);
-  const [countdown, setCountdown] = useState(0);
-  const [currentDelay, setCurrentDelay] = useState(1);
-  const countdownIntervalRef = useRef<NodeJS.Timeout | null>(null);
 
-  const [apiStatus, setApiStatus] = useState<ApiStatus>({ status: 'loading', message: 'Connecting to server...', fullResponse: null });
+  const [sessions, setSessions] = useState<DashboardSession[]>([]);
+  const [activeTabId, setActiveTabId] = useState<string | null>(null);
+
   const [isStatusModalOpen, setIsStatusModalOpen] = useState(false);
   const [testResult, setTestResult] = useState<any>(null);
   const [isTestModalOpen, setIsTestModalOpen] = useState(false);
   const [isTestVerifying, setIsTestVerifying] = useState(false);
-  
   const [emailFailures, setEmailFailures] = useState<EmailFailure[]>([]);
   const [isFailuresModalOpen, setIsFailuresModalOpen] = useState(false);
-
-  // --- START: NEW FEATURE ---
-  // Add state for the filter text
-  const [filterText, setFilterText] = useState('');
-  // --- END: NEW FEATURE ---
-
+  
+  const countdownIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const socketRef = useRef<Socket | null>(null);
 
   const { data: profiles = [], isLoading: profilesLoading } = useQuery<Profile[]>({
     queryKey: ['profiles'],
     queryFn: async () => {
       const response = await fetch(`${SERVER_URL}/api/profiles`);
-      if (!response.ok) {
-        throw new Error('Could not connect to the server.');
-      }
+      if (!response.ok) throw new Error('Could not connect to the server.');
       return response.json();
-    }
+    },
+    // This ensures the query only runs once and doesn't refetch automatically
+    refetchOnWindowFocus: false,
+    staleTime: Infinity,
   });
 
+  // --- START: MODIFICATION ---
+  // This is the corrected way to initialize the first session.
+  // It runs only when profiles are loaded and no sessions exist yet.
   useEffect(() => {
-    if (!selectedProfile && profiles.length > 0) {
-        const firstProfile = profiles[0];
-        setSelectedProfile(firstProfile);
-      }
+    if (profiles.length > 0 && sessions.length === 0) {
+      const initialSession = createNewSession('tab-1', profiles[0]);
+      setSessions([initialSession]);
+      setActiveTabId('tab-1');
+    }
   }, [profiles]);
+  // --- END: MODIFICATION ---
 
+  const updateSession = useCallback((sessionId: string, newSessionData: Partial<DashboardSession>) => {
+      setSessions(prev => prev.map(s => s.id === sessionId ? { ...s, ...newSessionData } : s));
+  }, []);
+  
   useEffect(() => {
-    socket = io(SERVER_URL);
+    if (!socketRef.current) {
+        socketRef.current = io(SERVER_URL);
+    }
+    const socket = socketRef.current;
 
-    socket.on('connect', () => {
-        console.log('Connected to WebSocket server!');
-        if (selectedProfile) {
-            setApiStatus({ status: 'loading', message: 'Checking API connection...' });
-            socket.emit('checkApiStatus', { selectedProfileName: selectedProfile.profileName });
+    const handleApiStatusResult = (result: { success: boolean, message: string, fullResponse?: any, jobId: string }) => {
+        updateSession(result.jobId, {
+            apiStatus: {
+                status: result.success ? 'success' : 'error',
+                message: result.message,
+                fullResponse: result.fullResponse || null
+            }
+        });
+    };
+
+    const handleTicketResult = (result: TicketResult & { jobId: string }) => {
+        const { jobId, ...ticketResult } = result;
+        setSessions(prev => prev.map(s => 
+            s.jobId === jobId ? { ...s, results: [...s.results, ticketResult] } : s
+        ));
+    };
+
+    const handleTicketUpdate = (updateData: { ticketNumber: string, success: boolean, details: string, fullResponse: any, jobId: string }) => {
+        const { jobId, ...update } = updateData;
+        setSessions(prev => prev.map(s => 
+            s.jobId === jobId ? { ...s, results: s.results.map(r => r.ticketNumber === update.ticketNumber ? { ...r, ...update } : r) } : s
+        ));
+    };
+
+    const handleBulkComplete = ({ jobId }: { jobId: string }) => {
+        const targetSession = sessions.find(s => s.jobId === jobId);
+        if (targetSession) {
+            updateSession(targetSession.id, { isProcessing: false, isPaused: false, isComplete: true });
+            toast({ title: "Processing Complete!", description: `Job for ${targetSession.profile?.profileName} has finished.` });
         }
-    });
+    };
+    
+    const handleBulkEnded = ({ jobId }: { jobId: string }) => {
+        const targetSession = sessions.find(s => s.jobId === jobId);
+        if (targetSession) {
+          updateSession(targetSession.id, { isProcessing: false, isPaused: false, isComplete: true, results: [], totalTicketsToProcess: 0 });
+          toast({ title: "Job Ended", description: `Job for ${targetSession.profile?.profileName} was stopped.`, variant: "destructive" });
+        }
+    };
+    
+    const handleBulkError = ({ message, jobId }: { message: string, jobId: string }) => {
+        const targetSession = sessions.find(s => s.jobId === jobId);
+        if (targetSession) {
+            updateSession(targetSession.id, { isProcessing: false, isPaused: false });
+            toast({ title: "Server Error", description: message, variant: "destructive" });
+        }
+    };
 
-    socket.on('apiStatusResult', (result: { success: boolean, message: string, fullResponse?: any }) => {
-      setApiStatus({
-        status: result.success ? 'success' : 'error',
-        message: result.message,
-        fullResponse: result.fullResponse || null
-      });
-    });
-
-    socket.on('testTicketResult', (result: any) => {
+    const handleTestResult = (result: any) => {
         setTestResult(result);
         setIsTestModalOpen(true);
-    });
+    };
 
-    socket.on('testTicketVerificationResult', (result: { success: boolean, details: string, fullResponse: any }) => {
-      setIsTestVerifying(false);
-      setTestResult(prevResult => ({
-        ...prevResult,
-        fullResponse: {
-          ...prevResult.fullResponse,
-          verifyEmail: result.fullResponse.verifyEmail
-        }
-      }));
-      toast({ 
-        title: result.success ? "Test Verification Complete" : "Test Verification Failed", 
-        description: "The test popup has been updated with the result."
-      });
-    });
+    const handleTestVerificationResult = (result: { success: boolean, details: string, fullResponse: any }) => {
+        setIsTestVerifying(false);
+        setTestResult(prev => ({ ...prev, fullResponse: { ...prev.fullResponse, verifyEmail: result.fullResponse.verifyEmail } }));
+        toast({ title: result.success ? "Test Verification Complete" : "Test Verification Failed", description: "The test popup has been updated." });
+    };
 
-    socket.on('ticketResult', (result: TicketResult) => setResults(prev => [...prev, result]));
-    
-    socket.on('ticketUpdate', (updateData: { ticketNumber: string, success: boolean, details: string, fullResponse: any }) => {
-        setResults(prevResults => 
-            prevResults.map(result => 
-                result.ticketNumber === updateData.ticketNumber 
-                    ? { ...result, success: updateData.success, details: updateData.details, fullResponse: updateData.fullResponse } 
-                    : result
-            )
-        );
-    });
-
-    socket.on('emailFailuresResult', (result: { success: boolean, data?: EmailFailure[], error?: string }) => {
+    const handleEmailFailuresResult = (result: { success: boolean, data?: EmailFailure[], error?: string }) => {
         if (result.success) {
             setEmailFailures(result.data || []);
             setIsFailuresModalOpen(true);
         } else {
-            toast({
-                title: "Error Fetching Failures",
-                description: result.error,
-                variant: "destructive",
-            });
+            toast({ title: "Error Fetching Failures", description: result.error, variant: "destructive" });
         }
-    });
-
-    socket.on('bulkComplete', () => {
-      setIsProcessing(false);
-      setIsPaused(false);
-      setIsComplete(true);
-      if (countdownIntervalRef.current) clearInterval(countdownIntervalRef.current);
-      setCountdown(0);
-      toast({ title: "Processing Complete!", description: "All tickets have been processed." });
-    });
-
-    socket.on('bulkEnded', () => {
-      setIsProcessing(false);
-      setIsPaused(false);
-      setIsComplete(true);
-      if (countdownIntervalRef.current) clearInterval(countdownIntervalRef.current);
-      setCountdown(0);
-      toast({ title: "Job Ended", description: "The process was stopped by the user.", variant: "destructive" });
-    });
-
-    socket.on('bulkError', (error: { message: string }) => {
-      setIsProcessing(false);
-      setIsPaused(false);
-      if (countdownIntervalRef.current) clearInterval(countdownIntervalRef.current);
-      setCountdown(0);
-      toast({ title: "Server Error", description: error.message, variant: "destructive" });
-    });
-    
-    return () => {
-      socket.disconnect();
     };
-  }, [toast, selectedProfile]);
+
+    socket.on('apiStatusResult', handleApiStatusResult);
+    socket.on('ticketResult', handleTicketResult);
+    socket.on('ticketUpdate', handleTicketUpdate);
+    socket.on('bulkComplete', handleBulkComplete);
+    socket.on('bulkEnded', handleBulkEnded);
+    socket.on('bulkError', handleBulkError);
+    socket.on('testTicketResult', handleTestResult);
+    socket.on('testTicketVerificationResult', handleTestVerificationResult);
+    socket.on('emailFailuresResult', handleEmailFailuresResult);
+
+    return () => {
+        socket.off('apiStatusResult', handleApiStatusResult);
+        socket.off('ticketResult', handleTicketResult);
+        socket.off('ticketUpdate', handleTicketUpdate);
+        socket.off('bulkComplete', handleBulkComplete);
+        socket.off('bulkEnded', handleBulkEnded);
+        socket.off('bulkError', handleBulkError);
+        socket.off('testTicketResult', handleTestResult);
+        socket.off('testTicketVerificationResult', handleTestVerificationResult);
+        socket.off('emailFailuresResult', handleEmailFailuresResult);
+    };
+  }, [sessions, toast, updateSession]);
 
   useEffect(() => {
-    if (countdownIntervalRef.current) {
-      clearInterval(countdownIntervalRef.current);
-    }
+    const socket = socketRef.current;
+    if (!socket) return;
 
-    if (isProcessing && !isPaused && results.length > 0 && results.length < totalTicketsToProcess) {
-      setCountdown(currentDelay);
-      countdownIntervalRef.current = setInterval(() => {
-        setCountdown(prev => {
-          if (prev <= 1) {
-            if (countdownIntervalRef.current) clearInterval(countdownIntervalRef.current);
-            return 0;
-          }
-          return prev - 1;
-        });
-      }, 1000);
-    }
-    
-    return () => {
-      if (countdownIntervalRef.current) {
-        clearInterval(countdownIntervalRef.current);
-      }
-    };
-  }, [results, isProcessing, totalTicketsToProcess, isPaused, currentDelay]);
+    sessions.forEach(session => {
+        if (session.profile && session.apiStatus.message === 'Initializing...') {
+            updateSession(session.id, { apiStatus: { status: 'loading', message: 'Checking API connection...' }});
+            socket.emit('checkApiStatus', { selectedProfileName: session.profile.profileName, jobId: session.id });
+        }
+    })
+  }, [sessions, updateSession]);
+
+
+  const activeSession = sessions.find(s => s.id === activeTabId);
 
   useEffect(() => {
-    let interval: NodeJS.Timeout;
-    if (isProcessing && !isPaused && processingStartTime) {
-      interval = setInterval(() => {
-        const elapsed = Math.floor((Date.now() - processingStartTime.getTime()) / 1000);
-        setProcessingTime(`${elapsed}s`);
-      }, 1000);
-    }
-    return () => {
-      if (interval) clearInterval(interval);
-    };
-  }, [isProcessing, isPaused, processingStartTime]);
+    if (countdownIntervalRef.current) clearInterval(countdownIntervalRef.current);
 
+    const sessionWithCountdown = sessions.find(s => s.isProcessing && !s.isPaused && s.results.length > 0 && s.results.length < s.totalTicketsToProcess);
+
+    if (sessionWithCountdown) {
+        updateSession(sessionWithCountdown.id, { countdown: sessionWithCountdown.currentDelay });
+        countdownIntervalRef.current = setInterval(() => {
+            setSessions(prev => prev.map(s => {
+                if (s.id === sessionWithCountdown.id && s.countdown > 1) {
+                    return { ...s, countdown: s.countdown - 1 };
+                }
+                if (s.id === sessionWithCountdown.id && s.countdown <= 1) {
+                    if (countdownIntervalRef.current) clearInterval(countdownIntervalRef.current);
+                    return { ...s, countdown: 0 };
+                }
+                return s;
+            }));
+        }, 1000);
+    }
+    
+    return () => { if (countdownIntervalRef.current) clearInterval(countdownIntervalRef.current); };
+  }, [sessions, setSessions, updateSession]);
+
+  useEffect(() => {
+    const processingSessions = sessions.filter(s => s.isProcessing && !s.isPaused);
+    if (processingSessions.length === 0) return;
+
+    const interval = setInterval(() => {
+        setSessions(prev => prev.map(s => {
+            if (s.isProcessing && !s.isPaused && s.processingStartTime) {
+                const elapsed = Math.floor((Date.now() - s.processingStartTime.getTime()) / 1000);
+                return { ...s, processingTime: `${elapsed}s` };
+            }
+            return s;
+        }));
+    }, 1000);
+    return () => clearInterval(interval);
+  }, [sessions]);
+  
+  const handleAddTab = useCallback((profileName: string) => {
+    const profile = profiles.find(p => p.profileName === profileName);
+    if (!profile) return;
+
+    const existingSession = sessions.find(s => s.profile?.profileName === profileName);
+    if (existingSession) {
+        setActiveTabId(existingSession.id);
+        toast({ title: "Tab Already Open", description: `Switched to the existing tab for ${profileName}.`});
+        return;
+    }
+
+    const newTabId = `tab-${Date.now()}`;
+    const newSession = createNewSession(newTabId, profile);
+    setSessions(prev => [...prev, newSession]);
+    setActiveTabId(newTabId);
+  }, [profiles, sessions, toast]);
+
+  const handleCloseTab = (tabIdToClose: string) => {
+    const sessionToClose = sessions.find(s => s.id === tabIdToClose);
+    if (sessionToClose?.isProcessing && sessionToClose.jobId && socketRef.current) {
+        socketRef.current.emit('endJob', { jobId: sessionToClose.jobId });
+    }
+    
+    const remainingSessions = sessions.filter(s => s.id !== tabIdToClose);
+    setSessions(remainingSessions);
+
+    if (activeTabId === tabIdToClose) {
+        setActiveTabId(remainingSessions.length > 0 ? remainingSessions[0].id : null);
+    }
+  };
+  
   const handleProfileChange = (profileName: string) => {
+    if (!activeSession) return;
     const profile = profiles.find(p => p.profileName === profileName);
     if (profile) {
-      setSelectedProfile(profile);
-      toast({ title: "Profile Changed", description: `Switched to ${profileName}` });
-      setApiStatus({ status: 'loading', message: 'Checking API connection...', fullResponse: null });
-      if (socket && socket.connected) {
-        socket.emit('checkApiStatus', { selectedProfileName: profile.profileName });
-      }
+      updateSession(activeSession.id, { profile, apiStatus: { status: 'loading', message: 'Initializing...' }});
+      toast({ title: "Profile Changed", description: `Switched to ${profileName} in this tab.` });
     }
   };
   
   const handleManualVerify = () => {
-    if (!selectedProfile) {
-      toast({ title: "No Profile Selected", description: "Cannot verify status without a profile.", variant: "destructive" });
-      return;
-    }
-    setApiStatus({ status: 'loading', message: 'Checking API connection...', fullResponse: null });
-    if (socket && socket.connected) {
-      socket.emit('checkApiStatus', { selectedProfileName: selectedProfile.profileName });
-    }
+    if (!activeSession || !activeSession.profile || !socketRef.current) return;
+    updateSession(activeSession.id, { apiStatus: { status: 'loading', message: 'Re-checking API connection...' }});
+    socketRef.current.emit('checkApiStatus', { selectedProfileName: activeSession.profile.profileName, jobId: activeSession.id });
     toast({ title: "Re-checking Connection..." });
   };
 
   const handleSendTest = (data: { email: string, subject: string, description: string, sendDirectReply: boolean, verifyEmail: boolean }) => {
-    if (!selectedProfile) {
-        toast({ title: "No Profile Selected", description: "Please select a profile before sending a test.", variant: "destructive" });
-        return;
-    }
+    if (!activeSession || !activeSession.profile || !socketRef.current) return;
     setTestResult(null);
     setIsTestVerifying(data.verifyEmail);
-    
-    toast({ 
-      title: "Sending Test Ticket...",
-      description: data.verifyEmail ? "Verification result will appear in the popup in ~10 seconds." : ""
-    });
-    socket.emit('sendTestTicket', { ...data, selectedProfileName: selectedProfile.profileName });
+    toast({ title: "Sending Test Ticket...", description: data.verifyEmail ? "Verification will update the popup." : "" });
+    socketRef.current.emit('sendTestTicket', { ...data, selectedProfileName: activeSession.profile.profileName });
   };
-
+  
   const handleFormSubmit = async (formData: TicketFormData) => {
-    const emails = formData.emails.split('\n').map(email => email.trim()).filter(email => email !== '');
-    if (emails.length === 0 || !selectedProfile) {
-      toast({ title: "Missing Information", description: "Please select a profile and enter at least one email.", variant: "destructive" });
-      return;
-    }
+    if (!activeSession || !activeSession.profile || !socketRef.current) return;
 
-    setIsProcessing(true);
-    setIsPaused(false);
-    setIsComplete(false);
-    setResults([]);
-    setProcessingStartTime(new Date());
-    setProcessingTime('0s');
-    setTotalTicketsToProcess(emails.length);
-    setCurrentDelay(formData.delay);
-    setFilterText('');
+    const emails = formData.emails.split('\n').map(e => e.trim()).filter(Boolean);
+    if (emails.length === 0) return;
+
+    const newJobId = `${activeSession.id}-job-${Date.now()}`;
+    updateSession(activeSession.id, {
+        jobId: newJobId,
+        isProcessing: true,
+        isPaused: false,
+        isComplete: false,
+        results: [],
+        processingStartTime: new Date(),
+        processingTime: '0s',
+        totalTicketsToProcess: emails.length,
+        currentDelay: formData.delay,
+        filterText: '',
+    });
     
-    toast({ title: "Processing Started", description: `Creating ${emails.length} tickets...` });
+    toast({ title: "Processing Started", description: `Creating ${emails.length} tickets for ${activeSession.profile.profileName}...` });
 
-    socket.emit('startBulkCreate', {
+    socketRef.current.emit('startBulkCreate', {
       ...formData,
       emails,
-      selectedProfileName: selectedProfile.profileName
+      selectedProfileName: activeSession.profile.profileName,
+      jobId: newJobId,
     });
   };
   
   const handlePauseResume = () => {
-    if (isPaused) {
-      socket.emit('resumeJob');
-      toast({ title: "Job Resumed", description: "The ticket creation will continue." });
+    if (!activeSession || !activeSession.jobId || !socketRef.current) return;
+    if (activeSession.isPaused) {
+      socketRef.current.emit('resumeJob', { jobId: activeSession.jobId });
+      toast({ title: "Job Resumed" });
     } else {
-      socket.emit('pauseJob');
-      toast({ title: "Job Paused", description: "The ticket creation is paused." });
+      socketRef.current.emit('pauseJob', { jobId: activeSession.jobId });
+      toast({ title: "Job Paused" });
     }
-    setIsPaused(!isPaused);
+    updateSession(activeSession.id, { isPaused: !activeSession.isPaused });
   };
   
   const handleEndJob = () => {
-    socket.emit('endJob');
-    setResults([]);
-    setTotalTicketsToProcess(0);
+    if (!activeSession || !activeSession.jobId || !socketRef.current) return;
+    socketRef.current.emit('endJob', { jobId: activeSession.jobId });
   };
   
   const handleFetchEmailFailures = () => {
-    if (!selectedProfile) {
-      toast({ title: "No Profile Selected", description: "Please select a profile first.", variant: "destructive" });
-      return;
-    }
+    if (!activeSession || !activeSession.profile || !socketRef.current) return;
     toast({ title: "Fetching Email Failures..." });
-    socket.emit('getEmailFailures', { selectedProfileName: selectedProfile.profileName });
+    socketRef.current.emit('getEmailFailures', { selectedProfileName: activeSession.profile.profileName });
   };
 
-  const stats = {
-    totalTickets: results.length,
-    successCount: results.filter(r => r.success).length,
-    errorCount: results.filter(r => !r.success).length,
-    processingTime,
-    totalToProcess: totalTicketsToProcess,
-    isProcessing: isProcessing,
-  };
+  const overallStats = sessions.reduce((acc, session) => ({
+    totalTickets: acc.totalTickets + session.results.length,
+    successCount: acc.successCount + session.results.filter(r => r.success).length,
+    errorCount: acc.errorCount + session.results.filter(r => !r.success).length,
+    totalToProcess: acc.totalToProcess + (session.isProcessing ? session.totalTicketsToProcess : session.results.length),
+    isProcessing: acc.isProcessing || session.isProcessing,
+  }), { totalTickets: 0, successCount: 0, errorCount: 0, totalToProcess: 0, isProcessing: false });
+
+  if (profilesLoading || !activeSession) {
+      return <DashboardLayout stats={{...overallStats, processingTime: '0s'}}><div className="text-center p-10"><Loader2 className="h-8 w-8 animate-spin mx-auto"/></div></DashboardLayout>
+  }
 
   return (
     <>
-      <DashboardLayout stats={stats}>
-        <div className="space-y-8">
-          <ProfileSelector
-            profiles={profiles}
-            selectedProfile={selectedProfile}
-            onProfileChange={handleProfileChange}
-            apiStatus={apiStatus}
-            onShowStatus={() => setIsStatusModalOpen(true)}
-            onFetchFailures={handleFetchEmailFailures}
-            onManualVerify={handleManualVerify}
-          />
-          <TicketForm
-            onSubmit={handleFormSubmit}
-            isProcessing={isProcessing}
-            isPaused={isPaused}
-            onPauseResume={handlePauseResume}
-            onEndJob={handleEndJob}
-            onSendTest={handleSendTest}
-          />
-          {/* --- START: NEW FEATURE --- */}
-          {/* Pass the filter state down to the ResultsDisplay component */}
-          <ResultsDisplay
-            results={results}
-            isProcessing={isProcessing}
-            isComplete={isComplete}
-            totalTickets={totalTicketsToProcess}
-            countdown={countdown}
-            filterText={filterText}
-            onFilterTextChange={setFilterText}
-          />
-          {/* --- END: NEW FEATURE --- */}
-        </div>
+      <DashboardLayout stats={{ ...overallStats, processingTime: activeSession.processingTime }}>
+          <Tabs value={activeTabId || ''} onValueChange={setActiveTabId} className="w-full">
+              <TabsList className="mb-4">
+                  {sessions.map(session => (
+                      <TabsTrigger key={session.id} value={session.id} className="relative pr-8">
+                          {session.profile?.profileName || 'New Tab'}
+                          {sessions.length > 1 && (
+                            <Button 
+                                variant="ghost" 
+                                size="icon" 
+                                className="absolute right-0.5 top-0.5 h-6 w-6"
+                                onClick={(e) => { e.stopPropagation(); handleCloseTab(session.id); }}
+                            >
+                                <X className="h-4 w-4" />
+                            </Button>
+                          )}
+                      </TabsTrigger>
+                  ))}
+              </TabsList>
+              {sessions.map(session => (
+                  <TabsContent key={session.id} value={session.id} className="focus-visible:ring-0 focus-visible:ring-offset-0">
+                    <div className="space-y-8">
+                      <ProfileSelector
+                          profiles={profiles}
+                          selectedProfile={session.profile}
+                          onProfileChange={handleProfileChange}
+                          apiStatus={session.apiStatus}
+                          onShowStatus={() => setIsStatusModalOpen(true)}
+                          onFetchFailures={handleFetchEmailFailures}
+                          onManualVerify={handleManualVerify}
+                          onAddTab={handleAddTab}
+                      />
+                      <TicketForm
+                          onSubmit={handleFormSubmit}
+                          isProcessing={session.isProcessing}
+                          isPaused={session.isPaused}
+                          onPauseResume={handlePauseResume}
+                          onEndJob={handleEndJob}
+                          onSendTest={handleSendTest}
+                      />
+                      <ResultsDisplay
+                          results={session.results}
+                          isProcessing={session.isProcessing}
+                          isComplete={session.isComplete}
+                          totalTickets={session.totalTicketsToProcess}
+                          countdown={session.countdown}
+                          filterText={session.filterText}
+                          onFilterTextChange={(text) => updateSession(session.id, { filterText: text })}
+                      />
+                    </div>
+                  </TabsContent>
+              ))}
+          </Tabs>
       </DashboardLayout>
       
+      {/* --- Modals --- */}
       <Dialog open={isStatusModalOpen} onOpenChange={setIsStatusModalOpen}>
         <DialogContent className="max-w-2xl">
             <DialogHeader>
                 <DialogTitle>API Connection Status</DialogTitle>
                 <DialogDescription>
-                    This is the live status of the connection to the Zoho Desk API for the selected profile.
+                    Live status of the Zoho Desk API connection for the profile in the active tab.
                 </DialogDescription>
             </DialogHeader>
-            <div className={`p-4 rounded-md ${apiStatus.status === 'success' ? 'bg-green-100 dark:bg-green-900/50' : apiStatus.status === 'error' ? 'bg-red-100 dark:bg-red-900/50' : 'bg-muted'}`}>
-                <p className="font-bold text-lg">{apiStatus.status.charAt(0).toUpperCase() + apiStatus.status.slice(1)}</p>
-                <p className="text-sm text-muted-foreground mt-1">{apiStatus.message}</p>
+            <div className={`p-4 rounded-md ${activeSession?.apiStatus.status === 'success' ? 'bg-green-100 dark:bg-green-900/50' : activeSession?.apiStatus.status === 'error' ? 'bg-red-100 dark:bg-red-900/50' : 'bg-muted'}`}>
+                <p className="font-bold text-lg">{activeSession?.apiStatus.status.charAt(0).toUpperCase() + (activeSession?.apiStatus.status.slice(1) || '')}</p>
+                <p className="text-sm text-muted-foreground mt-1">{activeSession?.apiStatus.message}</p>
             </div>
 
-            {apiStatus.fullResponse && (
+            {activeSession?.apiStatus.fullResponse && (
               <div className="mt-4">
                 <h4 className="text-sm font-semibold mb-2 text-foreground">Full Response from Server:</h4>
                 <pre className="bg-muted p-4 rounded-lg text-xs font-mono text-foreground border max-h-60 overflow-y-auto">
-                    {JSON.stringify(apiStatus.fullResponse, null, 2)}
+                    {JSON.stringify(activeSession.apiStatus.fullResponse, null, 2)}
                 </pre>
               </div>
             )}
@@ -446,7 +538,7 @@ export const ZohoDashboard: React.FC = () => {
             <DialogHeader>
                 <DialogTitle>Email Delivery Failure Alerts</DialogTitle>
                 <DialogDescription>
-                    Showing recent email delivery failures for the selected department.
+                    Recent email delivery failures for the selected department.
                 </DialogDescription>
             </DialogHeader>
             <div className="max-h-[60vh] overflow-y-auto -mx-6 px-6">
@@ -486,7 +578,7 @@ export const ZohoDashboard: React.FC = () => {
               ) : (
                 <div className="text-center py-12">
                   <p className="font-semibold">No Failures Found</p>
-                  <p className="text-sm text-muted-foreground mt-1">There are no recorded email delivery failures for this department.</p>
+                  <p className="text-sm text-muted-foreground mt-1">No recorded email delivery failures for this department.</p>
                 </div>
               )}
             </div>

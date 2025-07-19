@@ -2,10 +2,8 @@ import React from 'react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Button } from '@/components/ui/button';
-// --- START: MODIFICATION ---
-// Import the RefreshCw icon for our new button
-import { User, Building, AlertCircle, CheckCircle, Loader, MailWarning, RefreshCw } from 'lucide-react';
-// --- END: MODIFICATION ---
+import { User, Building, AlertCircle, CheckCircle, Loader, MailWarning, RefreshCw, PlusCircle } from 'lucide-react';
+
 
 interface Profile {
   profileName: string;
@@ -32,10 +30,8 @@ interface ProfileSelectorProps {
   apiStatus: ApiStatus;
   onShowStatus: () => void;
   onFetchFailures: () => void;
-  // --- START: MODIFICATION ---
-  // Add a new prop for the manual verify handler
   onManualVerify: () => void;
-  // --- END: MODIFICATION ---
+  onAddTab: (profileName: string) => void;
 }
 
 export const ProfileSelector: React.FC<ProfileSelectorProps> = ({
@@ -45,7 +41,8 @@ export const ProfileSelector: React.FC<ProfileSelectorProps> = ({
   apiStatus,
   onShowStatus,
   onFetchFailures,
-  onManualVerify, // Get the new handler from props
+  onManualVerify,
+  onAddTab,
 }) => {
   const getBadgeProps = () => {
     switch (apiStatus.status) {
@@ -68,7 +65,7 @@ export const ProfileSelector: React.FC<ProfileSelectorProps> = ({
           <CardTitle className="text-lg">Profile Selection</CardTitle>
         </div>
         <CardDescription>
-          Choose the Zoho Desk profile for ticket creation
+          Choose a profile for the current dashboard or open one in a new tab
         </CardDescription>
       </CardHeader>
       <CardContent>
@@ -86,11 +83,26 @@ export const ProfileSelector: React.FC<ProfileSelectorProps> = ({
                 <SelectItem 
                   key={profile.profileName} 
                   value={profile.profileName}
-                  className="cursor-pointer hover:bg-accent focus:bg-accent"
+                  className="cursor-pointer hover:bg-accent focus:bg-accent focus:outline-none"
                 >
-                  <div className="flex items-center space-x-3">
-                    <Building className="h-4 w-4 text-muted-foreground" />
-                    <span className="font-medium">{profile.profileName}</span>
+                  <div className="flex items-center justify-between w-full">
+                    <div className="flex items-center space-x-3">
+                      <Building className="h-4 w-4 text-muted-foreground" />
+                      <span className="font-medium">{profile.profileName}</span>
+                    </div>
+                    {/* --- START: MODIFICATION --- */}
+                    {/* This is the definitive fix. onPointerDown stops the event from bubbling up to the SelectItem */}
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-7 w-7 shrink-0"
+                      onPointerDown={(e) => e.preventDefault()}
+                      onClick={() => onAddTab(profile.profileName)}
+                      title="Open in new tab"
+                    >
+                      <PlusCircle className="h-4 w-4" />
+                    </Button>
+                    {/* --- END: MODIFICATION --- */}
                   </div>
                 </SelectItem>
               ))}
@@ -107,13 +119,10 @@ export const ProfileSelector: React.FC<ProfileSelectorProps> = ({
                       <MailWarning className="h-4 w-4 mr-2"/>
                       View Email Failures
                   </Button>
-                  {/* This button is now guaranteed to be clickable to show the status */}
                   <Button variant={badgeProps.variant} size="sm" onClick={onShowStatus}>
                       {badgeProps.icon}
                       {badgeProps.text}
                   </Button>
-                  {/* --- START: MODIFICATION --- */}
-                  {/* Add the new manual verify button */}
                   <Button 
                     variant="outline" 
                     size="icon" 
@@ -123,7 +132,6 @@ export const ProfileSelector: React.FC<ProfileSelectorProps> = ({
                   >
                       <RefreshCw className="h-4 w-4"/>
                   </Button>
-                  {/* --- END: MODIFICATION --- */}
                 </div>
                 
               </div>
